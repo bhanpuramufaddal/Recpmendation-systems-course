@@ -1,11 +1,5 @@
 # CS 329R: Recommendation Systems - From Foundations to Frontiers
 
-**Stanford University - Department of Computer Science**  
-**Instructor: Professor [Name]**  
-**Course Level: Graduate**
-
----
-
 ## Course Overview
 
 This course provides a comprehensive treatment of recommendation systems, spanning classical approaches to cutting-edge deep learning techniques. Students will understand the mathematical foundations, algorithmic principles, and practical considerations for building systems that predict user preferences and personalize content at scale.
@@ -730,6 +724,4 @@ This course provides a comprehensive treatment of recommendation systems, spanni
 
 ---
 
-*Course notes prepared for CS 329R: Recommendation Systems*  
-*Stanford University, Department of Computer Science*  
 *Last updated: January 2026*

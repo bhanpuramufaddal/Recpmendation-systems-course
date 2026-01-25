@@ -1,0 +1,1625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS 329R: Recommendation Systems - Course Viewer</title>
+
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+
+    <!-- KaTeX for LaTeX rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+    <!-- Highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+
+    <!-- Fuse.js for client-side search -->
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+        :root {
+            /* Modern Color Palette - Dark Theme */
+            --bg-primary: #0d0d0d;
+            --bg-secondary: #151515;
+            --bg-tertiary: #1a1a1a;
+            --text-primary: #f0f0f0;
+            --text-secondary: #b0b0b0;
+            --text-muted: #707070;
+
+            /* Gradient Accents */
+            --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --gradient-tech: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            --gradient-success: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+
+            /* Accent Colors */
+            --accent-primary: #667eea;
+            --accent-secondary: #00f2fe;
+            --accent-pink: #f093fb;
+            --accent-cyan: #4facfe;
+
+            /* Shadows */
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+            --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.3);
+
+            /* Spacing */
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+        }
+
+        /* Light Theme */
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f5f5f5;
+            --bg-tertiary: #eeeeee;
+            --text-primary: #1a1a1a;
+            --text-secondary: #4a4a4a;
+            --text-muted: #8a8a8a;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.15);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.2);
+            --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.15);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            line-height: 1.6;
+            color: var(--text-primary);
+            background: var(--bg-primary);
+            overflow: hidden;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+            gap: 20px;
+        }
+
+        /* Floating Sidebar with Glass Morphism */
+        .sidebar {
+            width: 290px;
+            background: rgba(26, 26, 26, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            overflow-y: auto;
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
+            flex-shrink: 0;
+            border-radius: var(--radius-lg);
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        [data-theme="light"] .sidebar {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .sidebar:hover {
+            box-shadow: var(--shadow-lg), 0 0 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            background: var(--gradient-primary);
+            border-radius: var(--radius-md) var(--radius-md) 0 0;
+            margin: -1px -1px 0 -1px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .sidebar-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, transparent, rgba(255, 255, 255, 0.1));
+            pointer-events: none;
+        }
+
+        .sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 5px;
+            letter-spacing: -0.5px;
+            position: relative;
+            z-index: 1;
+            color: white;
+        }
+
+        .sidebar-header p {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 400;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Search Box */
+        .search-container {
+            padding: 12px;
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 10;
+        }
+
+        .search-box {
+            width: 100%;
+            padding: 10px 36px 10px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            transition: all 0.3s;
+        }
+
+        .search-box:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .search-box::placeholder {
+            color: var(--text-muted);
+        }
+
+        .search-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 6px;
+            text-align: center;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .search-results {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 8px;
+            display: none;
+        }
+
+        .search-results.active {
+            display: block;
+        }
+
+        .search-result-item {
+            padding: 10px 12px;
+            background: rgba(255, 255, 255, 0.03);
+            margin: 4px 0;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+        }
+
+        .search-result-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-left-color: var(--accent-cyan);
+            transform: translateX(4px);
+        }
+
+        .search-result-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .search-result-context {
+            font-size: 11px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        /* Theme Toggle */
+        .theme-toggle {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 2;
+        }
+
+        .theme-toggle:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: rotate(180deg);
+        }
+
+        .theme-icon {
+            font-size: 20px;
+        }
+
+        /* Navigation */
+        .nav-section {
+            margin: 8px 12px;
+        }
+
+        .nav-week {
+            cursor: pointer;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border-left: 3px solid transparent;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: var(--radius-sm);
+            margin-bottom: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .nav-week::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            width: 3px;
+            background: var(--gradient-tech);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .nav-week:hover {
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateX(4px);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .nav-week:hover::before {
+            opacity: 1;
+        }
+
+        .nav-week.active {
+            background: rgba(102, 126, 234, 0.15);
+            border-left-color: var(--accent-primary);
+        }
+
+        .nav-week.active::before {
+            opacity: 1;
+        }
+
+        .week-title {
+            font-weight: 600;
+            font-size: 14px;
+            background: var(--gradient-tech);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.3px;
+        }
+
+        .week-subtitle {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            font-weight: 400;
+        }
+
+        .nav-topics {
+            display: none;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 8px 0;
+            margin: 4px 0 8px 0;
+            border-radius: var(--radius-sm);
+            animation: slideDown 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .nav-topics.active {
+            display: block;
+        }
+
+        .nav-topic {
+            padding: 8px 16px 8px 32px;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text-secondary);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            margin: 2px 8px;
+            border-radius: var(--radius-sm);
+        }
+
+        .nav-topic::before {
+            content: '›';
+            position: absolute;
+            left: 16px;
+            color: var(--accent-cyan);
+            opacity: 0;
+            transition: all 0.3s;
+        }
+
+        .nav-topic:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            padding-left: 36px;
+            transform: translateX(2px);
+        }
+
+        .nav-topic:hover::before {
+            opacity: 1;
+        }
+
+        .nav-topic.active {
+            background: rgba(79, 172, 254, 0.15);
+            color: var(--accent-cyan);
+            font-weight: 500;
+            border-left: 2px solid var(--accent-cyan);
+        }
+
+        /* Main Content Area */
+        .content-wrapper {
+            flex: 1;
+            display: flex;
+            gap: 20px;
+            overflow: hidden;
+        }
+
+        .content {
+            flex: 1;
+            background: rgba(26, 26, 26, 0.5);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow-y: auto;
+            padding: 30px 40px;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        [data-theme="light"] .content {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Table of Contents */
+        .toc-sidebar {
+            width: 250px;
+            background: rgba(26, 26, 26, 0.5);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: var(--shadow-lg);
+            display: none;
+        }
+
+        [data-theme="light"] .toc-sidebar {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .toc-sidebar.active {
+            display: block;
+        }
+
+        .toc-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 16px;
+            background: var(--gradient-tech);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .toc-list {
+            list-style: none;
+        }
+
+        .toc-item {
+            margin: 8px 0;
+        }
+
+        .toc-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 12px;
+            display: block;
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+            border-left: 2px solid transparent;
+        }
+
+        .toc-link:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+            border-left-color: var(--accent-cyan);
+        }
+
+        .toc-link.active {
+            color: var(--accent-cyan);
+            background: rgba(79, 172, 254, 0.1);
+            border-left-color: var(--accent-cyan);
+            font-weight: 500;
+        }
+
+        .toc-link.level-3 {
+            padding-left: 24px;
+            font-size: 11px;
+        }
+
+        .content-header {
+            margin-bottom: 35px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid transparent;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-cyan)) left bottom no-repeat;
+            background-size: 100% 2px;
+            position: relative;
+        }
+
+        .breadcrumb {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.5px;
+        }
+
+        .content-title {
+            font-size: 36px;
+            font-weight: 700;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -1px;
+        }
+
+        .markdown-body {
+            width: 100%;
+            margin: 0;
+        }
+
+        /* Markdown Styling */
+        .markdown-body h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            background: var(--gradient-tech);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.8px;
+            position: relative;
+            padding-bottom: 15px;
+        }
+
+        .markdown-body h1::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 60px;
+            height: 3px;
+            background: var(--gradient-tech);
+            border-radius: 2px;
+        }
+
+        .markdown-body h2 {
+            font-size: 26px;
+            font-weight: 600;
+            margin-top: 35px;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+            letter-spacing: -0.5px;
+            position: relative;
+            padding-left: 16px;
+        }
+
+        .markdown-body h2::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 70%;
+            background: var(--gradient-primary);
+            border-radius: 2px;
+        }
+
+        .markdown-body h3 {
+            font-size: 22px;
+            font-weight: 600;
+            margin-top: 28px;
+            margin-bottom: 14px;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+        }
+
+        .markdown-body p {
+            margin: 18px 0;
+            line-height: 1.8;
+            color: var(--text-secondary);
+            font-size: 15px;
+        }
+
+        .markdown-body ul, .markdown-body ol {
+            margin: 20px 0;
+            padding-left: 30px;
+            color: var(--text-secondary);
+        }
+
+        .markdown-body li {
+            margin: 10px 0;
+            line-height: 1.7;
+        }
+
+        .markdown-body code {
+            background: rgba(102, 126, 234, 0.15);
+            padding: 3px 8px;
+            border-radius: var(--radius-sm);
+            font-family: 'JetBrains Mono', 'Monaco', monospace;
+            font-size: 0.9em;
+            color: var(--accent-cyan);
+            border: 1px solid rgba(79, 172, 254, 0.2);
+        }
+
+        .markdown-body pre {
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            padding: 24px;
+            border-radius: var(--radius-md);
+            overflow-x: auto;
+            margin: 24px 0;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            position: relative;
+        }
+
+        .markdown-body pre::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: var(--gradient-tech);
+            opacity: 0.5;
+        }
+
+        .markdown-body pre code {
+            background: none;
+            padding: 0;
+            color: #abb2bf;
+            font-size: 14px;
+            border: none;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .markdown-body table {
+            border-collapse: separate;
+            border-spacing: 0;
+            width: 100%;
+            margin: 24px 0;
+            overflow: hidden;
+            display: block;
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-md);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .markdown-body th, .markdown-body td {
+            border: none;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 14px 16px;
+            text-align: left;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+
+        .markdown-body th {
+            background: rgba(102, 126, 234, 0.1);
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 14px;
+            letter-spacing: 0.3px;
+            position: relative;
+        }
+
+        .markdown-body th::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--gradient-tech);
+        }
+
+        .markdown-body tbody tr {
+            background: rgba(255, 255, 255, 0.02);
+            transition: all 0.3s;
+        }
+
+        .markdown-body tbody tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+            transform: scale(1.01);
+        }
+
+        .markdown-body tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .markdown-body tr:nth-child(even):hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .markdown-body blockquote {
+            border-left: 4px solid transparent;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-cyan)) left center no-repeat;
+            background-size: 4px 100%;
+            padding: 16px 24px;
+            margin: 24px 0;
+            color: var(--text-secondary);
+            font-style: italic;
+            background-color: rgba(102, 126, 234, 0.05);
+            border-radius: var(--radius-sm);
+            position: relative;
+        }
+
+        .markdown-body blockquote::before {
+            content: '"';
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 48px;
+            color: rgba(102, 126, 234, 0.2);
+            font-style: normal;
+            line-height: 1;
+        }
+
+        .markdown-body hr {
+            border: none;
+            height: 2px;
+            background: var(--gradient-tech);
+            margin: 40px 0;
+            border-radius: 2px;
+            opacity: 0.3;
+        }
+
+        .markdown-body a {
+            color: var(--accent-cyan);
+            text-decoration: none;
+            position: relative;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .markdown-body a::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--gradient-tech);
+            transition: width 0.3s;
+        }
+
+        .markdown-body a:hover {
+            color: var(--accent-primary);
+        }
+
+        .markdown-body a:hover::after {
+            width: 100%;
+        }
+
+        /* LaTeX Math */
+        .katex {
+            font-size: 1.1em;
+            color: var(--text-primary);
+        }
+
+        .katex-display {
+            margin: 24px 0;
+            overflow-x: auto;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .markdown-body strong, .markdown-body b {
+            color: var(--text-primary);
+            font-weight: 600;
+            background: var(--gradient-tech);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .markdown-body em, .markdown-body i {
+            color: var(--accent-cyan);
+        }
+
+        /* Loading State */
+        .loading {
+            text-align: center;
+            padding: 80px;
+            color: var(--text-muted);
+            font-size: 16px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 0.5;
+            }
+            50% {
+                opacity: 1;
+            }
+        }
+
+        .error {
+            background: rgba(245, 87, 108, 0.1);
+            color: #ff6b6b;
+            padding: 24px;
+            border-radius: var(--radius-md);
+            margin: 24px 0;
+            border: 1px solid rgba(245, 87, 108, 0.3);
+            box-shadow: var(--shadow-md);
+        }
+
+        /* Modern Scrollbar Styling */
+        .sidebar::-webkit-scrollbar, .content::-webkit-scrollbar, .toc-sidebar::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        .sidebar::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, var(--accent-primary), var(--accent-cyan));
+            border-radius: 10px;
+            border: 2px solid rgba(0, 0, 0, 0.2);
+            transition: all 0.3s;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, var(--accent-cyan), var(--accent-primary));
+            box-shadow: 0 0 10px rgba(102, 126, 234, 0.5);
+        }
+
+        .content::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+        }
+
+        .content::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 10px;
+            border: 2px solid rgba(0, 0, 0, 0.2);
+        }
+
+        .content::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, var(--accent-secondary), var(--accent-primary));
+            box-shadow: 0 0 10px rgba(0, 242, 254, 0.4);
+        }
+
+        /* Additional Modern Touches */
+        @keyframes contentFadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .markdown-body > * {
+            animation: contentFadeIn 0.6s ease-out backwards;
+        }
+
+        .markdown-body > *:nth-child(1) { animation-delay: 0.05s; }
+        .markdown-body > *:nth-child(2) { animation-delay: 0.1s; }
+        .markdown-body > *:nth-child(3) { animation-delay: 0.15s; }
+        .markdown-body > *:nth-child(4) { animation-delay: 0.2s; }
+        .markdown-body > *:nth-child(5) { animation-delay: 0.25s; }
+
+        /* Selection Styling */
+        ::selection {
+            background: rgba(102, 126, 234, 0.3);
+            color: var(--text-primary);
+        }
+
+        ::-moz-selection {
+            background: rgba(102, 126, 234, 0.3);
+            color: var(--text-primary);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+            .toc-sidebar {
+                display: none !important;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+                gap: 10px;
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                max-height: 40vh;
+            }
+
+            .content-wrapper {
+                flex-direction: column;
+            }
+
+            .content {
+                padding: 20px;
+            }
+
+            .content-title {
+                font-size: 24px;
+            }
+
+            .markdown-body h1 {
+                font-size: 26px;
+            }
+
+            .markdown-body h2 {
+                font-size: 22px;
+            }
+        }
+
+        /* Keyboard Shortcut Hint */
+        .keyboard-hint {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 16px;
+            border-radius: var(--radius-md);
+            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .keyboard-hint.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body data-theme="dark">
+    <div class="container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h1>CS 329R</h1>
+                <p>Recommendation Systems</p>
+                <div class="theme-toggle" onclick="toggleTheme()">
+                    <span class="theme-icon">🌙</span>
+                </div>
+            </div>
+
+            <!-- Search -->
+            <div class="search-container">
+                <input type="text" class="search-box" id="searchBox" placeholder="Search notes... (press /)" autocomplete="off">
+                <div class="search-hint">Press / to focus, Esc to clear</div>
+                <div class="search-results" id="searchResults"></div>
+            </div>
+
+            <div id="navigation"></div>
+        </nav>
+
+        <!-- Main Content with TOC -->
+        <div class="content-wrapper">
+            <main class="content">
+                <div class="content-header">
+                    <div class="breadcrumb" id="breadcrumb"></div>
+                    <h1 class="content-title" id="content-title">Welcome</h1>
+                </div>
+                <div class="markdown-body" id="markdown-content">
+                    <div class="loading">Loading course content...</div>
+                </div>
+            </main>
+
+            <!-- Table of Contents -->
+            <aside class="toc-sidebar" id="tocSidebar">
+                <div class="toc-title">On This Page</div>
+                <ul class="toc-list" id="tocList"></ul>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Keyboard Hint -->
+    <div class="keyboard-hint" id="keyboardHint"></div>
+
+    <script>
+        // Course structure
+        const courseStructure = [
+            {
+                week: "overview",
+                title: "Course Overview",
+                subtitle: "Introduction & Navigation",
+                file: "README.md",
+                topics: []
+            },
+            {
+                week: "week-01-introduction",
+                title: "Week 1: Introduction",
+                subtitle: "The Recommendation Problem",
+                topics: [
+                    { file: "overview.md", title: "Overview" },
+                    { file: "historical-context.md", title: "Historical Context" },
+                    { file: "applications.md", title: "Applications" },
+                    { file: "pipeline.md", title: "Recommendation Pipeline" },
+                    { file: "challenges.md", title: "Key Challenges" },
+                    { file: "practice-problems.md", title: "Practice Problems" }
+                ]
+            },
+            {
+                week: "week-02-memory-based-cf",
+                title: "Week 2: Memory-Based CF",
+                subtitle: "Collaborative Filtering Foundations",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "user-based-cf.md", title: "User-Based CF" },
+                    { file: "item-based-cf.md", title: "Item-Based CF" },
+                    { file: "similarity-measures.md", title: "Similarity Measures" }
+                ]
+            },
+            {
+                week: "week-03-matrix-factorization",
+                title: "Week 3: Matrix Factorization",
+                subtitle: "Model-Based Collaborative Filtering",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "framework.md", title: "MF Framework" },
+                    { file: "algorithms.md", title: "Optimization Algorithms" },
+                    { file: "optimization.md", title: "Optimization" },
+                    { file: "advanced-variants.md", title: "Advanced Variants" },
+                    { file: "implicit-feedback.md", title: "Implicit Feedback" }
+                ]
+            },
+            {
+                week: "week-04-content-based",
+                title: "Week 4: Content-Based",
+                subtitle: "Feature-Based Recommendations",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "foundations.md", title: "Content-Based Foundations" },
+                    { file: "feature-representation.md", title: "Feature Representation" },
+                    { file: "profile-learning.md", title: "Profile Learning" },
+                    { file: "hybrid-strategies.md", title: "Hybrid Strategies" }
+                ]
+            },
+            {
+                week: "week-05-neural-cf",
+                title: "Week 5: Neural CF",
+                subtitle: "Deep Learning for CF",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "mf-to-neural.md", title: "From MF to Neural Networks" },
+                    { file: "ncf.md", title: "Neural Collaborative Filtering" },
+                    { file: "deep-variants.md", title: "Deep Variants (GMF, NeuMF, Wide & Deep)" },
+                    { file: "training.md", title: "Training Neural CF Models" }
+                ]
+            },
+            {
+                week: "week-06-sequential",
+                title: "Week 6: Sequential",
+                subtitle: "Session-Based Recommendations",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "modeling-sequences.md", title: "Modeling Sequences (Markov Chains)" },
+                    { file: "rnn-recsys.md", title: "RNNs for RecSys (GRU4Rec, LSTM)" },
+                    { file: "transformers.md", title: "Transformer Architectures" },
+                    { file: "conversational.md", title: "Conversational Recommendation" }
+                ]
+            },
+            {
+                week: "week-07-gnn",
+                title: "Week 7: Graph Neural Networks",
+                subtitle: "Graph-Based Recommendations",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "graph-basics.md", title: "Graph Basics (DeepWalk, Node2Vec)" },
+                    { file: "gnn-fundamentals.md", title: "GNN Fundamentals (GCN, GraphSAGE, GAT)" },
+                    { file: "lightgcn.md", title: "LightGCN" }
+                ]
+            },
+            {
+                week: "week-08-two-tower",
+                title: "Week 8: Two-Tower Models",
+                subtitle: "Large-Scale Retrieval",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "two-tower.md", title: "Two-Tower Architecture" },
+                    { file: "youtube-system.md", title: "YouTube Case Study" },
+                    { file: "retrieval-scale.md", title: "Retrieval at Scale" }
+                ]
+            },
+            {
+                week: "week-09-embeddings",
+                title: "Week 9: Embeddings",
+                subtitle: "Pre-training & Multi-Modal",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            },
+            {
+                week: "week-10-context-bandits",
+                title: "Week 10: Bandits",
+                subtitle: "Context-Aware & RL",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            },
+            {
+                week: "week-11-evaluation",
+                title: "Week 11: Evaluation",
+                subtitle: "Metrics & Testing",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "ab-testing.md", title: "A/B Testing" }
+                ]
+            },
+            {
+                week: "week-12-bias-fairness",
+                title: "Week 12: Bias & Fairness",
+                subtitle: "Ethics & Debiasing",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            },
+            {
+                week: "week-13-production",
+                title: "Week 13: Production",
+                subtitle: "MLOps & Deployment",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            },
+            {
+                week: "week-14-social-media",
+                title: "Week 14: Social Media",
+                subtitle: "Facebook, Instagram, TikTok",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "instagram.md", title: "Instagram Explore & Reels" },
+                    { file: "tiktok.md", title: "TikTok Deep Dive" }
+                ]
+            },
+            {
+                week: "week-15-streaming-ecommerce",
+                title: "Week 15: Streaming & E-commerce",
+                subtitle: "Netflix, Spotify, Amazon",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "netflix.md", title: "Netflix Recommendations" }
+                ]
+            },
+            {
+                week: "week-16-emerging-apps",
+                title: "Week 16: Emerging Apps",
+                subtitle: "Airbnb, Uber, Dating",
+                topics: [
+                    { file: "README.md", title: "Overview" },
+                    { file: "airbnb.md", title: "Airbnb Search & Recommendations" },
+                    { file: "cursor-ai.md", title: "Cursor AI" }
+                ]
+            },
+            {
+                week: "week-17-explainability",
+                title: "Week 17: Explainability",
+                subtitle: "Interpretable Recommendations",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            },
+            {
+                week: "week-18-transfer-learning",
+                title: "Week 18: Transfer Learning",
+                subtitle: "Cross-Domain & Meta-Learning",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            },
+            {
+                week: "week-19-emerging-paradigms",
+                title: "Week 19: Emerging Paradigms",
+                subtitle: "Future Directions",
+                topics: [
+                    { file: "README.md", title: "Overview" }
+                ]
+            }
+        ];
+
+        let currentWeek = null;
+        let currentTopic = null;
+        let fuse = null;
+        let allContent = [];
+
+        // Theme Toggle
+        function toggleTheme() {
+            const body = document.body;
+            const icon = document.querySelector('.theme-icon');
+            const currentTheme = body.getAttribute('data-theme');
+
+            if (currentTheme === 'dark') {
+                body.setAttribute('data-theme', 'light');
+                icon.textContent = '☀️';
+                localStorage.setItem('theme', 'light');
+            } else {
+                body.setAttribute('data-theme', 'dark');
+                icon.textContent = '🌙';
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        // Load saved theme
+        const savedTheme = localStorage.getItem('theme') || 'dark';
+        document.body.setAttribute('data-theme', savedTheme);
+        document.querySelector('.theme-icon').textContent = savedTheme === 'dark' ? '🌙' : '☀️';
+
+        // Initialize navigation
+        function initNavigation() {
+            const nav = document.getElementById('navigation');
+
+            courseStructure.forEach((week, weekIndex) => {
+                const weekDiv = document.createElement('div');
+                weekDiv.className = 'nav-section';
+
+                const weekHeader = document.createElement('div');
+                weekHeader.className = 'nav-week';
+                weekHeader.innerHTML = `
+                    <div class="week-title">${week.title}</div>
+                    <div class="week-subtitle">${week.subtitle}</div>
+                `;
+
+                weekHeader.onclick = () => toggleWeek(weekIndex);
+                weekDiv.appendChild(weekHeader);
+
+                if (week.topics.length > 0) {
+                    const topicsDiv = document.createElement('div');
+                    topicsDiv.className = 'nav-topics';
+                    topicsDiv.id = `topics-${weekIndex}`;
+
+                    week.topics.forEach((topic, topicIndex) => {
+                        const topicDiv = document.createElement('div');
+                        topicDiv.className = 'nav-topic';
+                        topicDiv.textContent = topic.title;
+                        topicDiv.onclick = (e) => {
+                            e.stopPropagation();
+                            loadContent(weekIndex, topicIndex);
+                        };
+                        topicsDiv.appendChild(topicDiv);
+                    });
+
+                    weekDiv.appendChild(topicsDiv);
+                } else {
+                    // Week has no topics, load directly
+                    weekHeader.onclick = () => loadContent(weekIndex, null);
+                }
+
+                nav.appendChild(weekDiv);
+            });
+        }
+
+        function toggleWeek(weekIndex) {
+            const week = courseStructure[weekIndex];
+            if (week.topics.length === 0) return;
+
+            const topicsDiv = document.getElementById(`topics-${weekIndex}`);
+            const weekDiv = topicsDiv.previousElementSibling;
+
+            if (topicsDiv.classList.contains('active')) {
+                topicsDiv.classList.remove('active');
+                weekDiv.classList.remove('active');
+            } else {
+                // Close other weeks
+                document.querySelectorAll('.nav-topics').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.nav-week').forEach(w => w.classList.remove('active'));
+
+                topicsDiv.classList.add('active');
+                weekDiv.classList.add('active');
+            }
+        }
+
+        async function loadContent(weekIndex, topicIndex) {
+            const week = courseStructure[weekIndex];
+            currentWeek = weekIndex;
+            currentTopic = topicIndex;
+
+            // Update active states
+            document.querySelectorAll('.nav-week').forEach((w, i) => {
+                w.classList.toggle('active', i === weekIndex);
+            });
+
+            document.querySelectorAll('.nav-topic').forEach(t => t.classList.remove('active'));
+
+            if (topicIndex !== null) {
+                const topicsDiv = document.getElementById(`topics-${weekIndex}`);
+                const topics = topicsDiv.querySelectorAll('.nav-topic');
+                topics[topicIndex].classList.add('active');
+                topicsDiv.classList.add('active');
+            }
+
+            // Determine file path
+            let filePath;
+            let title;
+
+            if (week.week === 'overview') {
+                filePath = 'README.md';
+                title = 'Course Overview';
+            } else if (topicIndex !== null) {
+                filePath = `${week.week}/${week.topics[topicIndex].file}`;
+                title = week.topics[topicIndex].title;
+            } else {
+                filePath = `${week.week}/${week.file}`;
+                title = week.title;
+            }
+
+            // Update breadcrumb and title
+            document.getElementById('breadcrumb').textContent = week.title;
+            document.getElementById('content-title').textContent = title;
+
+            // Load and render markdown
+            const contentDiv = document.getElementById('markdown-content');
+            contentDiv.innerHTML = '<div class="loading">Loading...</div>';
+
+            try {
+                const response = await fetch(filePath);
+                if (!response.ok) throw new Error('File not found');
+
+                const markdown = await response.text();
+                const html = marked.parse(markdown);
+                contentDiv.innerHTML = html;
+
+                // Highlight code blocks
+                contentDiv.querySelectorAll('pre code').forEach((block) => {
+                    hljs.highlightElement(block);
+                });
+
+                // Render LaTeX
+                renderMathInElement(contentDiv, {
+                    delimiters: [
+                        {left: '$$', right: '$$', display: true},
+                        {left: '$', right: '$', display: false},
+                        {left: '\\[', right: '\\]', display: true},
+                        {left: '\\(', right: '\\)', display: false}
+                    ],
+                    throwOnError: false
+                });
+
+                // Generate TOC
+                generateTOC(contentDiv);
+
+                // Scroll to top
+                document.querySelector('.content').scrollTop = 0;
+
+            } catch (error) {
+                contentDiv.innerHTML = `
+                    <div class="error">
+                        <strong>Error loading content:</strong><br>
+                        ${error.message}<br>
+                        File: ${filePath}
+                    </div>
+                `;
+            }
+        }
+
+        // Generate Table of Contents
+        function generateTOC(contentDiv) {
+            const headings = contentDiv.querySelectorAll('h2, h3');
+            const tocList = document.getElementById('tocList');
+            const tocSidebar = document.getElementById('tocSidebar');
+
+            tocList.innerHTML = '';
+
+            if (headings.length > 1) {
+                tocSidebar.classList.add('active');
+
+                headings.forEach((heading, index) => {
+                    const id = `heading-${index}`;
+                    heading.id = id;
+
+                    const li = document.createElement('li');
+                    li.className = 'toc-item';
+
+                    const link = document.createElement('a');
+                    link.href = `#${id}`;
+                    link.className = `toc-link ${heading.tagName === 'H3' ? 'level-3' : ''}`;
+                    link.textContent = heading.textContent;
+                    link.onclick = (e) => {
+                        e.preventDefault();
+                        heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        updateActiveTOCLink(link);
+                    };
+
+                    li.appendChild(link);
+                    tocList.appendChild(li);
+                });
+
+                // Scroll spy
+                const content = document.querySelector('.content');
+                content.addEventListener('scroll', () => {
+                    let current = '';
+                    headings.forEach(heading => {
+                        const rect = heading.getBoundingClientRect();
+                        if (rect.top < 100) {
+                            current = heading.id;
+                        }
+                    });
+
+                    if (current) {
+                        const currentLink = tocList.querySelector(`a[href="#${current}"]`);
+                        if (currentLink) updateActiveTOCLink(currentLink);
+                    }
+                });
+            } else {
+                tocSidebar.classList.remove('active');
+            }
+        }
+
+        function updateActiveTOCLink(activeLink) {
+            document.querySelectorAll('.toc-link').forEach(link => link.classList.remove('active'));
+            activeLink.classList.add('active');
+        }
+
+        // Search Functionality
+        async function initSearch() {
+            // Index all content
+            const indexed = [];
+
+            for (const [weekIndex, week] of courseStructure.entries()) {
+                if (week.topics.length > 0) {
+                    for (const [topicIndex, topic] of week.topics.entries()) {
+                        const filePath = `${week.week}/${topic.file}`;
+                        try {
+                            const response = await fetch(filePath);
+                            const markdown = await response.text();
+                            indexed.push({
+                                week: week.title,
+                                topic: topic.title,
+                                content: markdown,
+                                weekIndex,
+                                topicIndex,
+                                path: filePath
+                            });
+                        } catch (e) {
+                            console.error(`Failed to index ${filePath}`);
+                        }
+                    }
+                } else if (week.file) {
+                    const filePath = week.week === 'overview' ? 'README.md' : `${week.week}/${week.file}`;
+                    try {
+                        const response = await fetch(filePath);
+                        const markdown = await response.text();
+                        indexed.push({
+                            week: week.title,
+                            topic: week.subtitle,
+                            content: markdown,
+                            weekIndex,
+                            topicIndex: null,
+                            path: filePath
+                        });
+                    } catch (e) {
+                        console.error(`Failed to index ${filePath}`);
+                    }
+                }
+            }
+
+            allContent = indexed;
+
+            // Initialize Fuse.js
+            fuse = new Fuse(indexed, {
+                keys: ['week', 'topic', 'content'],
+                threshold: 0.3,
+                includeScore: true,
+                includeMatches: true,
+                minMatchCharLength: 3
+            });
+
+            console.log(`Indexed ${indexed.length} documents for search`);
+        }
+
+        // Handle search input
+        const searchBox = document.getElementById('searchBox');
+        const searchResults = document.getElementById('searchResults');
+
+        searchBox.addEventListener('input', (e) => {
+            const query = e.target.value.trim();
+
+            if (query.length < 2) {
+                searchResults.classList.remove('active');
+                searchResults.innerHTML = '';
+                return;
+            }
+
+            const results = fuse.search(query);
+            displaySearchResults(results.slice(0, 10));
+        });
+
+        function displaySearchResults(results) {
+            if (results.length === 0) {
+                searchResults.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-muted);">No results found</div>';
+                searchResults.classList.add('active');
+                return;
+            }
+
+            searchResults.innerHTML = results.map(result => {
+                const { week, topic, content, weekIndex, topicIndex } = result.item;
+
+                // Extract context
+                const match = result.matches[0];
+                const matchIndex = match.indices[0][0];
+                const contextStart = Math.max(0, matchIndex - 50);
+                const contextEnd = Math.min(content.length, matchIndex + 100);
+                let context = content.substring(contextStart, contextEnd).trim();
+
+                if (contextStart > 0) context = '...' + context;
+                if (contextEnd < content.length) context = context + '...';
+
+                return `
+                    <div class="search-result-item" onclick="loadContent(${weekIndex}, ${topicIndex})">
+                        <div class="search-result-title">${week} › ${topic}</div>
+                        <div class="search-result-context">${context}</div>
+                    </div>
+                `;
+            }).join('');
+
+            searchResults.classList.add('active');
+        }
+
+        // Keyboard Shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Focus search with /
+            if (e.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                e.preventDefault();
+                searchBox.focus();
+                showKeyboardHint('Search focused (Esc to clear)');
+            }
+
+            // Clear search with Escape
+            if (e.key === 'Escape') {
+                searchBox.value = '';
+                searchBox.blur();
+                searchResults.classList.remove('active');
+                searchResults.innerHTML = '';
+            }
+
+            // Navigate with arrow keys
+            if (e.key === 'ArrowLeft' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                navigatePrev();
+                showKeyboardHint('← Previous topic');
+            }
+
+            if (e.key === 'ArrowRight' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+                navigateNext();
+                showKeyboardHint('→ Next topic');
+            }
+        });
+
+        function navigatePrev() {
+            if (currentWeek === null) return;
+
+            const week = courseStructure[currentWeek];
+
+            if (currentTopic !== null && currentTopic > 0) {
+                // Previous topic in same week
+                loadContent(currentWeek, currentTopic - 1);
+            } else if (currentWeek > 0) {
+                // Last topic of previous week
+                const prevWeek = courseStructure[currentWeek - 1];
+                if (prevWeek.topics.length > 0) {
+                    loadContent(currentWeek - 1, prevWeek.topics.length - 1);
+                } else {
+                    loadContent(currentWeek - 1, null);
+                }
+            }
+        }
+
+        function navigateNext() {
+            if (currentWeek === null) return;
+
+            const week = courseStructure[currentWeek];
+
+            if (currentTopic !== null && currentTopic < week.topics.length - 1) {
+                // Next topic in same week
+                loadContent(currentWeek, currentTopic + 1);
+            } else if (currentWeek < courseStructure.length - 1) {
+                // First topic of next week
+                const nextWeek = courseStructure[currentWeek + 1];
+                if (nextWeek.topics.length > 0) {
+                    loadContent(currentWeek + 1, 0);
+                } else {
+                    loadContent(currentWeek + 1, null);
+                }
+            }
+        }
+
+        function showKeyboardHint(message) {
+            const hint = document.getElementById('keyboardHint');
+            hint.textContent = message;
+            hint.classList.add('show');
+            setTimeout(() => hint.classList.remove('show'), 1500);
+        }
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', async () => {
+            initNavigation();
+            await initSearch();
+            loadContent(0, null); // Load course overview
+        });
+    </script>
+</body>
+</html>
