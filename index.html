@@ -1387,8 +1387,9 @@
                 filePath = `${week.week}/${week.topics[topicIndex].file}`;
                 title = week.topics[topicIndex].title;
             } else {
-                filePath = `${week.week}/${week.file}`;
-                title = week.title;
+                // If topicIndex is null for regular weeks, default to first topic (README.md)
+                filePath = `${week.week}/${week.topics[0].file}`;
+                title = week.topics[0].title;
             }
 
             // Update breadcrumb and title
@@ -1681,6 +1682,48 @@
         document.addEventListener('DOMContentLoaded', async () => {
             initNavigation();
             await initSearch();
+
+            // Set up link interception for internal navigation
+            const contentDiv = document.getElementById('markdown-content');
+            contentDiv.addEventListener('click', (e) => {
+                const link = e.target.closest('a');
+                if (!link) return;
+
+                const href = link.getAttribute('href');
+                if (!href || href.startsWith('http') || href.startsWith('#')) return;
+
+                // Case 1: Link to a week folder (e.g., "week-01-introduction/")
+                if (href.includes('week-')) {
+                    e.preventDefault();
+
+                    // Extract week identifier (e.g., "week-01-introduction" from "week-01-introduction/" or "week-01-introduction/README.md")
+                    const weekMatch = href.match(/(week-\d+-[^/]+)/);
+                    if (weekMatch) {
+                        const weekId = weekMatch[1];
+
+                        // Find the week index in courseStructure
+                        const weekIndex = courseStructure.findIndex(w => w.week === weekId);
+                        if (weekIndex !== -1) {
+                            // Navigate to the week's overview (first topic which is README.md at index 0)
+                            loadContent(weekIndex, 0);
+                        }
+                    }
+                }
+                // Case 2: Relative link to a topic file (e.g., "overview.md", "historical-context.md")
+                else if (href.endsWith('.md') && currentWeek !== null) {
+                    e.preventDefault();
+
+                    // Find the target topic in the current week
+                    const week = courseStructure[currentWeek];
+                    if (week && week.topics) {
+                        const topicIdx = week.topics.findIndex(t => t.file === href);
+                        if (topicIdx !== -1) {
+                            loadContent(currentWeek, topicIdx);
+                        }
+                    }
+                }
+            });
+
             loadContent(0, null); // Load course overview
         });
     </script>
