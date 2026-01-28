@@ -190,11 +190,30 @@ Example: $\alpha_0 = 0.01$, $\gamma = 0.5$, $k = 10$ epochs
 **2. Exponential decay**:
 $$\alpha_t = \alpha_0 \cdot e^{-\beta t}$$
 
+where:
+- $\alpha_t$ = learning rate at epoch $t$
+- $\alpha_0$ = initial learning rate (e.g., 0.01)
+- $\beta$ = decay rate (typical values: 0.01-0.1; higher = faster decay)
+- $t$ = current epoch number
+
 **3. Inverse time decay**:
 $$\alpha_t = \frac{\alpha_0}{1 + \beta t}$$
 
+where:
+- $\alpha_t$ = learning rate at epoch $t$
+- $\alpha_0$ = initial learning rate (e.g., 0.01)
+- $\beta$ = decay rate (typical values: 0.01-0.1; controls how quickly learning rate decreases)
+- $t$ = current epoch number
+
 **4. Cosine annealing** (modern deep learning):
 $$\alpha_t = \alpha_{min} + \frac{1}{2}(\alpha_{max} - \alpha_{min})(1 + \cos(\frac{t}{T} \pi))$$
+
+where:
+- $\alpha_t$ = learning rate at epoch $t$
+- $\alpha_{min}$ = minimum learning rate (e.g., 1e-6)
+- $\alpha_{max}$ = maximum learning rate (e.g., 0.01)
+- $t$ = current epoch number
+- $T$ = total number of epochs in the cycle
 
 **Recommendation**: Start with step decay (simplest, effective).
 
@@ -267,12 +286,24 @@ For iteration = 1 to max_iterations:
     For each user u:
         # Solve: u_u = argmin Σ_i (r_ui - u_u^T v_i)^2 + λ||u_u||^2
         # Closed-form solution (see derivation below)
-        u_u = (V^T V + λI)^(-1) V^T r_u
+        u_u = (V_u^T V_u + λI)^(-1) V_u^T r_u
+
+        where:
+        - V_u = matrix of item embeddings for items rated by user u (size: d × n_u)
+        - r_u = vector of ratings by user u (size: n_u × 1)
+        - λ = regularization parameter
+        - I = identity matrix (size: d × d)
+        - d = embedding dimension, n_u = number of items rated by user u
 
     # Step 2: Fix U, solve for all items
     For each item i:
         # Solve: v_i = argmin Σ_u (r_ui - u_u^T v_i)^2 + λ||v_i||^2
-        v_i = (U^T U + λI)^(-1) U^T r_i
+        v_i = (U_i^T U_i + λI)^(-1) U_i^T r_i
+
+        where:
+        - U_i = matrix of user embeddings for users who rated item i (size: d × m_i)
+        - r_i = vector of ratings for item i (size: m_i × 1)
+        - m_i = number of users who rated item i
 
     # Check convergence (e.g., RMSE change < threshold)
     if converged:

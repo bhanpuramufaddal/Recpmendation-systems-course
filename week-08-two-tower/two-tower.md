@@ -226,9 +226,20 @@ $$\mathcal{L}_{\text{pointwise}} = -\sum_{(u,i)} [y_{ui} \log(\sigma(\mathbf{u}^
 
 **Idea**: User embedding should be closer to positive item than negative item.
 
-$$\mathcal{L}_{\text{triplet}} = \sum_{(u, i^+, i^-)} \max(0, \margin + d(\mathbf{u}, \mathbf{v}_{i^-}) - d(\mathbf{u}, \mathbf{v}_{i^+}))$$
+$$\mathcal{L}_{\text{triplet}} = \sum_{(u, i^+, i^-)} \max(0, \text{margin} + d(\mathbf{u}, \mathbf{v}_{i^-}) - d(\mathbf{u}, \mathbf{v}_{i^+}))$$
 
-where $d$ = distance (e.g., $1 - \mathbf{u}^T \mathbf{v}$).
+where:
+- $\mathbf{u}$ = user embedding vector
+- $\mathbf{v}_{i^+}$ = positive item embedding (item user interacted with)
+- $\mathbf{v}_{i^-}$ = negative item embedding (item user didn't interact with)
+- $d(\cdot, \cdot)$ = distance function measuring dissimilarity between embeddings
+  - Common choices:
+    - Euclidean distance: $d(\mathbf{a}, \mathbf{b}) = \|\mathbf{a} - \mathbf{b}\|_2$
+    - Cosine distance: $d(\mathbf{a}, \mathbf{b}) = 1 - \frac{\mathbf{a}^T \mathbf{b}}{\|\mathbf{a}\| \|\mathbf{b}\|}$
+    - Dot product distance: $d(\mathbf{a}, \mathbf{b}) = 1 - \mathbf{a}^T \mathbf{b}$ (when embeddings are normalized)
+- $\text{margin}$ = minimum separation between positive and negative distances (typical values: 0.1-0.5)
+
+**Intuition**: Loss is zero when positive item is closer than negative item by at least the margin. Otherwise, loss encourages increasing the gap.
 
 **Implementation**:
 ```python

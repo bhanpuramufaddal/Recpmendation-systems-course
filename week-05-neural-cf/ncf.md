@@ -87,7 +87,16 @@ Sigmoid: σ(h^T (p_u ⊙ q_i))
 **Formula**:
 $$\hat{y}_{ui}^{GMF} = \sigma(\mathbf{h}^T (\mathbf{p}_u \odot \mathbf{q}_i))$$
 
-**Note**: If $\mathbf{h} = \mathbf{1}$ (all ones), this is standard MF.
+where:
+- $\hat{y}_{ui}^{GMF}$ = predicted score for user $u$ and item $i$ using GMF
+- $\mathbf{p}_u \in \mathbb{R}^k$ = user $u$'s embedding vector
+- $\mathbf{q}_i \in \mathbb{R}^k$ = item $i$'s embedding vector
+- $\odot$ = element-wise (Hadamard) product: $(\mathbf{p}_u \odot \mathbf{q}_i)_j = p_{uj} \cdot q_{ij}$
+- $\mathbf{h} \in \mathbb{R}^k$ = learnable weight vector (assigns importance to each dimension)
+- $\sigma(\cdot)$ = sigmoid activation function: $\sigma(x) = \frac{1}{1 + e^{-x}}$
+- $k$ = embedding dimension
+
+**Note**: If $\mathbf{h} = \mathbf{1}$ (all ones), this reduces to standard matrix factorization.
 
 ---
 

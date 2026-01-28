@@ -88,6 +88,19 @@ where $\mathbf{e}_i \in \mathbb{R}^d$ is embedding of item $i$.
 2. **Compute attention scores**:
    $$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d}}\right)V$$
 
+where:
+- $Q \in \mathbb{R}^{t \times d}$ = query matrix (transformed input embeddings)
+- $K \in \mathbb{R}^{t \times d}$ = key matrix (transformed input embeddings)
+- $V \in \mathbb{R}^{t \times d}$ = value matrix (transformed input embeddings)
+- $d$ = embedding dimension
+- $\sqrt{d}$ = scaling factor to maintain variance
+
+**Why scale by $\sqrt{d}$?**
+- Without scaling, dot products $QK^T$ grow in magnitude as $d$ increases
+- Large magnitudes push softmax into regions with very small gradients (saturation)
+- Dividing by $\sqrt{d}$ keeps variance of $QK^T$ approximately 1, ensuring stable gradients
+- Mathematical intuition: If $Q, K$ have entries with variance 1, then each element of $QK^T$ has variance $\approx d$, so dividing by $\sqrt{d}$ normalizes to variance $\approx 1$
+
 **Breakdown**:
 - $QK^T \in \mathbb{R}^{t \times t}$: Similarity between all pairs of items
 - $\text{softmax}$: Normalize to probabilities
@@ -178,9 +191,20 @@ This prevents "cheating" by looking at future items.
 $$\mathcal{L} = -\sum_{S_u \in \mathcal{D}} \sum_{t=1}^{|S_u|} \log P(i_t | [i_1, \ldots, i_{t-1}])$$
 
 where:
+- $\mathcal{D}$ = training dataset (set of all user sequences)
+- $S_u$ = interaction sequence for user $u$
+- $|S_u|$ = length of user $u$'s sequence
+- $i_t$ = item at position $t$ in the sequence
+
 $$P(i_t | \mathbf{h}_{t-1}) = \frac{\exp(\mathbf{h}_{t-1}^T \mathbf{e}_{i_t})}{\sum_{i' \in \mathcal{I}} \exp(\mathbf{h}_{t-1}^T \mathbf{e}_{i'})}$$
 
-**Softmax over all items**: Expensive! Use negative sampling or sampled softmax.
+where:
+- $\mathbf{h}_{t-1} \in \mathbb{R}^d$ = transformer output embedding at position $t-1$ (after all attention layers)
+- $\mathbf{e}_{i_t} \in \mathbb{R}^d$ = item embedding for item $i_t$ (often shared with input embeddings)
+- $\mathcal{I}$ = set of all possible items in the catalog
+- $d$ = embedding dimension
+
+**Softmax over all items**: Expensive when $|\mathcal{I}|$ is large! Use negative sampling or sampled softmax.
 
 ---
 

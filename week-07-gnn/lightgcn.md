@@ -82,10 +82,21 @@ $$\mathbf{h}_i^{(l+1)} = \sigma\left( \sum_{j \in \mathcal{N}(i)} \frac{1}{\sqrt
 
 $$\mathbf{h}_i^{(l+1)} = \sigma\left( W_1^{(l)} \mathbf{h}_i^{(l)} + \sum_{j \in \mathcal{N}(i)} \frac{1}{\sqrt{|\mathcal{N}(i)||\mathcal{N}(j)|}} (W_2^{(l)} \mathbf{h}_j^{(l)} + W_3^{(l)} (\mathbf{h}_i^{(l)} \odot \mathbf{h}_j^{(l)})) \right)$$
 
-**Added complexity**:
-- Self-connection: $W_1^{(l)} \mathbf{h}_i^{(l)}$
-- Element-wise product: $\mathbf{h}_i^{(l)} \odot \mathbf{h}_j^{(l)}$
-- Multiple weight matrices
+where:
+- $\mathbf{h}_i^{(l)}$ = embedding of node $i$ at layer $l$
+- $\mathcal{N}(i)$ = neighbors of node $i$ in the user-item bipartite graph
+- $\sigma$ = nonlinear activation function (e.g., ReLU, LeakyReLU)
+- $\odot$ = element-wise (Hadamard) product
+- $W_1^{(l)} \in \mathbb{R}^{d \times d}$ = weight matrix for **self-connection** (transforms node's own embedding)
+- $W_2^{(l)} \in \mathbb{R}^{d \times d}$ = weight matrix for **neighbor message** (transforms neighbor embeddings)
+- $W_3^{(l)} \in \mathbb{R}^{d \times d}$ = weight matrix for **interaction term** (transforms element-wise product of node and neighbor)
+- $\frac{1}{\sqrt{|\mathcal{N}(i)||\mathcal{N}(j)|}}$ = symmetric normalization coefficient
+
+**Added complexity compared to basic GCN**:
+- Self-connection: $W_1^{(l)} \mathbf{h}_i^{(l)}$ - preserves node's own information
+- Neighbor aggregation: $W_2^{(l)} \mathbf{h}_j^{(l)}$ - captures neighbor features
+- Element-wise product: $W_3^{(l)} (\mathbf{h}_i^{(l)} \odot \mathbf{h}_j^{(l)})$ - models explicit interaction between node and neighbors
+- Three separate weight matrices per layer
 
 **Problem**: More parameters = overfitting on sparse data!
 
