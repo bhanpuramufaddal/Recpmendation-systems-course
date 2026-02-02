@@ -1678,6 +1678,59 @@
             setTimeout(() => hint.classList.remove('show'), 1500);
         }
 
+        // Configure marked to preserve LaTeX
+        // Block-level math extension for $$...$$ on its own lines
+        const mathBlockExtension = {
+            name: 'mathBlock',
+            level: 'block',
+            start(src) {
+                return src.match(/^\$\$/)?.index;
+            },
+            tokenizer(src) {
+                const match = src.match(/^\$\$([\s\S]+?)\$\$/);
+                if (match) {
+                    return {
+                        type: 'mathBlock',
+                        raw: match[0],
+                        text: match[1].trim()
+                    };
+                }
+                return undefined;
+            },
+            renderer(token) {
+                return `<div class="math-block">$$${token.text}$$</div>`;
+            }
+        };
+
+        // Inline math extension for $...$
+        const mathInlineExtension = {
+            name: 'mathInline',
+            level: 'inline',
+            start(src) {
+                return src.indexOf('$');
+            },
+            tokenizer(src) {
+                // Skip if it's a block math (starts with $$)
+                if (src.startsWith('$$')) {
+                    return undefined;
+                }
+                const match = src.match(/^\$([^$\n]+?)\$/);
+                if (match) {
+                    return {
+                        type: 'mathInline',
+                        raw: match[0],
+                        text: match[1]
+                    };
+                }
+                return undefined;
+            },
+            renderer(token) {
+                return `<span class="math-inline">$${token.text}$</span>`;
+            }
+        };
+
+        marked.use({ extensions: [mathBlockExtension, mathInlineExtension] });
+
         // Initialize on load
         document.addEventListener('DOMContentLoaded', async () => {
             initNavigation();
