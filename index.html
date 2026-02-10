@@ -1406,10 +1406,10 @@
 
                 const markdown = await response.text();
                 // Preprocess to protect LaTeX from marked
-                const { markdown: processedMarkdown, mathBlocks } = preprocessLaTeX(markdown);
+                const processedMarkdown = preprocessLaTeX(markdown);
                 let html = marked.parse(processedMarkdown);
                 // Restore LaTeX after marked processing
-                html = restoreLaTeX(html, mathBlocks);
+                html = restoreLaTeX(html);
                 contentDiv.innerHTML = html;
 
                 // Highlight code blocks
@@ -1684,37 +1684,35 @@
 
         // Preprocess markdown to protect LaTeX from marked's parsing
         function preprocessLaTeX(markdown) {
-            const mathBlocks = [];
+            // Use base64 encoding to completely protect LaTeX content
 
-            // Protect block math $$...$$
+            // Protect block math $$...$$ first (longer delimiter)
             markdown = markdown.replace(/\$\$([\s\S]+?)\$\$/g, (match, content) => {
-                const id = mathBlocks.length;
-                mathBlocks.push({ type: 'block', content: content.trim() });
-                return `%%MATHBLOCK${id}%%`;
+                const encoded = btoa(unescape(encodeURIComponent(content.trim())));
+                return `<math-block data-content="${encoded}"></math-block>`;
             });
 
             // Protect inline math $...$
             markdown = markdown.replace(/\$([^$\n]+?)\$/g, (match, content) => {
-                const id = mathBlocks.length;
-                mathBlocks.push({ type: 'inline', content });
-                return `%%MATHINLINE${id}%%`;
+                const encoded = btoa(unescape(encodeURIComponent(content)));
+                return `<math-inline data-content="${encoded}"></math-inline>`;
             });
 
-            return { markdown, mathBlocks };
+            return markdown;
         }
 
         // Restore LaTeX after marked processing
-        function restoreLaTeX(html, mathBlocks) {
+        function restoreLaTeX(html) {
             // Restore block math
-            html = html.replace(/%%MATHBLOCK(\d+)%%/g, (match, id) => {
-                const block = mathBlocks[parseInt(id)];
-                return `<div class="math-block">$$${block.content}$$</div>`;
+            html = html.replace(/<math-block data-content="([^"]+)"><\/math-block>/g, (match, encoded) => {
+                const content = decodeURIComponent(escape(atob(encoded)));
+                return `<div class="math-block">$$${content}$$</div>`;
             });
 
             // Restore inline math
-            html = html.replace(/%%MATHINLINE(\d+)%%/g, (match, id) => {
-                const block = mathBlocks[parseInt(id)];
-                return `<span class="math-inline">$${block.content}$</span>`;
+            html = html.replace(/<math-inline data-content="([^"]+)"><\/math-inline>/g, (match, encoded) => {
+                const content = decodeURIComponent(escape(atob(encoded)));
+                return `<span class="math-inline">$${content}$</span>`;
             });
 
             return html;
