@@ -1405,7 +1405,11 @@
                 if (!response.ok) throw new Error('File not found');
 
                 const markdown = await response.text();
-                const html = marked.parse(markdown);
+                // Preprocess to protect LaTeX from marked
+                const { markdown: processedMarkdown, mathBlocks } = preprocessLaTeX(markdown);
+                let html = marked.parse(processedMarkdown);
+                // Restore LaTeX after marked processing
+                html = restoreLaTeX(html, mathBlocks);
                 contentDiv.innerHTML = html;
 
                 // Highlight code blocks
@@ -1678,58 +1682,43 @@
             setTimeout(() => hint.classList.remove('show'), 1500);
         }
 
-        // Configure marked to preserve LaTeX
-        // Block-level math extension for $$...$$ on its own lines
-        const mathBlockExtension = {
-            name: 'mathBlock',
-            level: 'block',
-            start(src) {
-                return src.match(/^\$\$/)?.index;
-            },
-            tokenizer(src) {
-                const match = src.match(/^\$\$([\s\S]+?)\$\$/);
-                if (match) {
-                    return {
-                        type: 'mathBlock',
-                        raw: match[0],
-                        text: match[1].trim()
-                    };
-                }
-                return undefined;
-            },
-            renderer(token) {
-                return `<div class="math-block">$$${token.text}$$</div>`;
-            }
-        };
+        // Preprocess markdown to protect LaTeX from marked's parsing
+        function preprocessLaTeX(markdown) {
+            const mathBlocks = [];
 
-        // Inline math extension for $...$
-        const mathInlineExtension = {
-            name: 'mathInline',
-            level: 'inline',
-            start(src) {
-                return src.indexOf('$');
-            },
-            tokenizer(src) {
-                // Skip if it's a block math (starts with $$)
-                if (src.startsWith('$$')) {
-                    return undefined;
-                }
-                const match = src.match(/^\$([^$\n]+?)\$/);
-                if (match) {
-                    return {
-                        type: 'mathInline',
-                        raw: match[0],
-                        text: match[1]
-                    };
-                }
-                return undefined;
-            },
-            renderer(token) {
-                return `<span class="math-inline">$${token.text}$</span>`;
-            }
-        };
+            // Protect block math $$...$$
+            markdown = markdown.replace(/\$\$([\s\S]+?)\$\$/g, (match, content) => {
+                const id = mathBlocks.length;
+                mathBlocks.push({ type: 'block', content: content.trim() });
+                return `%%MATHBLOCK${id}%%`;
+            });
 
-        marked.use({ extensions: [mathBlockExtension, mathInlineExtension] });
+            // Protect inline math $...$
+            markdown = markdown.replace(/\$([^$\n]+?)\$/g, (match, content) => {
+                const id = mathBlocks.length;
+                mathBlocks.push({ type: 'inline', content });
+                return `%%MATHINLINE${id}%%`;
+            });
+
+            return { markdown, mathBlocks };
+        }
+
+        // Restore LaTeX after marked processing
+        function restoreLaTeX(html, mathBlocks) {
+            // Restore block math
+            html = html.replace(/%%MATHBLOCK(\d+)%%/g, (match, id) => {
+                const block = mathBlocks[parseInt(id)];
+                return `<div class="math-block">$$${block.content}$$</div>`;
+            });
+
+            // Restore inline math
+            html = html.replace(/%%MATHINLINE(\d+)%%/g, (match, id) => {
+                const block = mathBlocks[parseInt(id)];
+                return `<span class="math-inline">$${block.content}$</span>`;
+            });
+
+            return html;
+        }
 
         // Initialize on load
         document.addEventListener('DOMContentLoaded', async () => {
