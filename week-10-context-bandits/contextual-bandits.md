@@ -1,5 +1,46 @@
 # Week 10: Contextual Bandits
 
+## The Opening Problem: Why Does Epsilon-Greedy Ignore User Context?
+
+*"Before we dive into contextual bandits, let me pose a question that should bother you deeply."*
+
+Consider a news website using standard epsilon-greedy with epsilon = 0.1. The algorithm explores 10% of the time by showing random articles to ALL users identically.
+
+**The Suboptimality**:
+
+```
+User A: 25-year-old tech enthusiast, browses at 11 PM, uses mobile
+User B: 55-year-old retiree, browses at 8 AM, uses desktop
+
+Standard epsilon-greedy:
+- Exploration: 10% random for BOTH users
+- Exploitation: Show article with highest AVERAGE click rate to BOTH
+
+Problem: Article about "AI breakthroughs" might have:
+- 80% CTR for User A
+- 5% CTR for User B
+
+Article about "Retirement planning" might have:
+- 3% CTR for User A
+- 70% CTR for User B
+
+Showing the "best average" article ignores this heterogeneity!
+```
+
+**The Core Insight**:
+
+$$\text{Standard MAB: } \mathbb{E}[r | a] \quad \text{vs} \quad \text{Contextual: } \mathbb{E}[r | a, \mathbf{x}]$$
+
+In standard MAB, we learn ONE best arm for the entire population. In contextual bandits, we learn a POLICY that maps context to actions:
+
+$$\pi: \mathcal{X} \rightarrow \mathcal{A}$$
+
+*"Think about it this way: would you recommend the same movie to a horror fan and a romantic comedy lover just because it has the highest average rating? Of course not. Context matters."*
+
+**Socratic Pause**: *"What information about users are we throwing away when we use standard epsilon-greedy? How much regret does this cause?"*
+
+---
+
 ## Overview
 
 **Contextual bandits** extend multi-armed bandits by incorporating **context** (features) when choosing actions.
@@ -9,14 +50,8 @@
 - **Contextual**: Best arm depends on context (user features, time, etc.)
 
 **Example** (News):
-- **MAB**: Article A is best → show to everyone
+- **MAB**: Article A is best on average -> show to everyone
 - **Contextual**: Article A best for sports fans, Article B best for tech enthusiasts
-
-**Formulation**:
-- Observe context $\mathbf{x}_t$ (user features, item features)
-- Choose arm $a_t$ based on context
-- Receive reward $r_t$
-- Update policy
 
 This document covers contextual bandit algorithms for personalized recommendations.
 
@@ -25,78 +60,321 @@ This document covers contextual bandit algorithms for personalized recommendatio
 ## Learning Objectives
 
 By the end of this section, you will:
-- Understand contextual bandits vs. MAB
-- Implement LinUCB for linear contextual bandits
-- Apply neural contextual bandits
-- Use Thompson Sampling with context
-- Deploy contextual bandits in production
+- Understand the fundamental Context -> Action -> Reward framework
+- Derive LinUCB from ridge regression confidence bounds
+- Trace through numerical examples with matrix updates
+- Understand Thompson Sampling for linear contextual bandits
+- Compare disjoint vs hybrid models
+- Recognize what can go wrong in practice
 
 ---
 
-## Problem Formulation
+## The Context -> Action -> Reward Framework
 
-### Context-Dependent Rewards
+*"Let me formalize the contextual bandit problem step by step. This framework is the foundation of everything that follows."*
 
-**Setup**: At each round $t$:
-1. Observe context $\mathbf{x}_t \in \mathbb{R}^d$ (user features, item features, time, etc.)
-2. Choose arm $a_t \in \{1, \ldots, K\}$
-3. Receive reward $r_t = f(\mathbf{x}_t, a_t) + \epsilon_t$
+### Step 1: The Observation
 
-**Goal**: Learn policy $\pi(\mathbf{x}) \rightarrow a$ that maximizes expected reward.
+At each round $t = 1, 2, \ldots, T$:
+
+**Observe context** $\mathbf{x}_t \in \mathbb{R}^d$
+
+This context encodes everything we know at decision time:
+- User features: age, gender, location, browsing history embedding
+- Item features: category, recency, popularity score
+- Contextual features: time of day, device type, session length
+
+**Example Context Vector**:
+```
+x_t = [age_normalized,        # 0.35 (35 years old, scaled)
+       is_mobile,             # 1.0
+       hour_sin,              # 0.87 (encoding 11 PM)
+       hour_cos,              # -0.5
+       tech_interest_score,   # 0.9
+       sports_interest_score, # 0.2
+       intercept]             # 1.0 (for bias term)
+```
+
+### Step 2: The Action
+
+**Choose arm** $a_t \in \mathcal{A} = \{1, \ldots, K\}$
+
+The policy $\pi$ maps context to action:
+$$a_t = \pi(\mathbf{x}_t)$$
+
+In practice, $\pi$ depends on our current estimates and exploration strategy.
+
+### Step 3: The Reward
+
+**Observe reward** $r_t \in \mathbb{R}$ (often $\{0, 1\}$ for clicks)
+
+**Critical assumption**: We only observe reward for the chosen arm!
+
+$$r_t = r_t(a_t) \quad \text{(counterfactual rewards } r_t(a') \text{ for } a' \neq a_t \text{ are unobserved)}$$
+
+### Step 4: The Model Update
+
+**Update policy** based on observed $(x_t, a_t, r_t)$
+
+This is where the learning happens. We accumulate evidence about how context relates to rewards for each arm.
+
+### The Formal Problem Statement
+
+**Assumption**: Reward is generated by an unknown function:
+
+$$r_t = f^*(a_t, \mathbf{x}_t) + \epsilon_t, \quad \epsilon_t \sim \mathcal{N}(0, \sigma^2)$$
+
+**Regret** (what we want to minimize):
+
+$$\text{Regret}(T) = \sum_{t=1}^T \left[ \max_a f^*(a, \mathbf{x}_t) - f^*(a_t, \mathbf{x}_t) \right]$$
+
+**Goal**: Learn a policy $\pi$ that minimizes cumulative regret.
 
 ---
 
-### Linear Reward Model
+## The Linear Reward Model
 
-**Assumption**: Reward is linear in context.
+*"The simplest yet remarkably powerful assumption is that rewards are linear in context."*
 
-$$r_t = \mathbf{x}_t^T \theta_a + \epsilon_t$$
+### The Model
 
-where $\theta_a \in \mathbb{R}^d$ = parameters for arm $a$.
+**Assumption**: For each arm $a$, there exists $\theta_a^* \in \mathbb{R}^d$ such that:
 
-**Interpretation**: Each arm has different feature weights.
+$$\mathbb{E}[r_t | a_t = a, \mathbf{x}_t] = \mathbf{x}_t^T \theta_a^*$$
+
+Equivalently:
+$$r_t = \mathbf{x}_t^T \theta_{a_t}^* + \epsilon_t, \quad \epsilon_t \sim \mathcal{N}(0, \sigma^2)$$
+
+### Interpretation
+
+Each arm has its own parameter vector $\theta_a^* \in \mathbb{R}^d$. The $j$-th component $\theta_{a,j}^*$ represents how much feature $j$ contributes to the reward for arm $a$.
 
 **Example** (Movie recommendations):
 ```
 Context x = [is_action_fan, is_comedy_fan, weekend, evening]
             [1, 0, 1, 1]
 
-Arm 1 (Action movie): θ₁ = [0.8, -0.2, 0.3, 0.1]
-  → r₁ = 0.8*1 + (-0.2)*0 + 0.3*1 + 0.1*1 = 1.2
+Arm 1 (Action movie): theta_1* = [0.8, -0.2, 0.3, 0.1]
+  Expected reward = 0.8*1 + (-0.2)*0 + 0.3*1 + 0.1*1 = 1.2
 
-Arm 2 (Comedy): θ₂ = [-0.1, 0.9, 0.2, -0.1]
-  → r₂ = (-0.1)*1 + 0.9*0 + 0.2*1 + (-0.1)*1 = 0.0
+Arm 2 (Comedy): theta_2* = [-0.1, 0.9, 0.2, -0.1]
+  Expected reward = (-0.1)*1 + 0.9*0 + 0.2*1 + (-0.1)*1 = 0.0
 
-Choose Arm 1 (higher expected reward for this context)
+Optimal action for this context: Arm 1 (Action movie)
 ```
 
+**Socratic Pause**: *"What if the true reward function is non-linear in context? What happens if a user likes action AND comedy, but only action-comedies specifically? Can a linear model capture this interaction?"*
+
 ---
 
-## LinUCB
+## LinUCB: Full Derivation from Ridge Regression
 
-### Algorithm
+*"Now we arrive at LinUCB. Let me derive it from first principles so you understand where every term comes from."*
 
-**LinUCB** (Linear Upper Confidence Bound): UCB for linear contextual bandits.
+### Step 1: Ridge Regression for Parameter Estimation
 
-**Key idea**: Maintain confidence ellipsoid around $\hat{\theta}_a$.
+Given data $\{(\mathbf{x}_s, r_s)\}$ for arm $a$, we estimate $\theta_a$ by minimizing regularized squared error:
 
-**Selection rule**:
-$$a_t = \arg\max_a \left[ \hat{\theta}_a^T \mathbf{x}_t + \alpha \sqrt{\mathbf{x}_t^T A_a^{-1} \mathbf{x}_t} \right]$$
+$$\hat{\theta}_a = \arg\min_\theta \sum_{s: a_s = a} (r_s - \mathbf{x}_s^T \theta)^2 + \lambda ||\theta||_2^2$$
 
-where:
-- $\hat{\theta}_a$ = estimated parameters for arm $a$
-- $A_a$ = precision matrix (inverse covariance)
-- $\alpha$ = exploration parameter (typically 0.1-1.0)
-- $\sqrt{\mathbf{x}_t^T A_a^{-1} \mathbf{x}_t}$ = confidence bonus
+**Closed-form solution** (ridge regression):
 
-**Updates**:
-$$A_a = \sum_{t: a_t=a} \mathbf{x}_t \mathbf{x}_t^T + I$$
-$$\mathbf{b}_a = \sum_{t: a_t=a} r_t \mathbf{x}_t$$
 $$\hat{\theta}_a = A_a^{-1} \mathbf{b}_a$$
 
+where:
+- $A_a = \sum_{s: a_s = a} \mathbf{x}_s \mathbf{x}_s^T + \lambda I = D_a^T D_a + \lambda I$ (design matrix $D_a$)
+- $\mathbf{b}_a = \sum_{s: a_s = a} r_s \mathbf{x}_s = D_a^T \mathbf{r}_a$
+
+### Step 2: Confidence Bounds from Bayesian Interpretation
+
+**Key insight**: Ridge regression has a Bayesian interpretation.
+
+**Prior**: $\theta_a \sim \mathcal{N}(0, \lambda^{-1} I)$
+
+**Likelihood**: $r_s | \mathbf{x}_s, \theta_a \sim \mathcal{N}(\mathbf{x}_s^T \theta_a, \sigma^2)$
+
+**Posterior**: $\theta_a | \text{data} \sim \mathcal{N}(\hat{\theta}_a, \sigma^2 A_a^{-1})$
+
+For any context $\mathbf{x}$, the predicted reward is:
+
+$$\mathbf{x}^T \theta_a | \text{data} \sim \mathcal{N}(\mathbf{x}^T \hat{\theta}_a, \sigma^2 \mathbf{x}^T A_a^{-1} \mathbf{x})$$
+
+### Step 3: The UCB Principle
+
+**Standard deviation of prediction**:
+$$\text{std}(\mathbf{x}^T \theta_a | \text{data}) = \sigma \sqrt{\mathbf{x}^T A_a^{-1} \mathbf{x}}$$
+
+**Upper confidence bound** (with probability $\approx 1 - \delta$):
+
+$$\text{UCB}_a(\mathbf{x}) = \mathbf{x}^T \hat{\theta}_a + \alpha \sqrt{\mathbf{x}^T A_a^{-1} \mathbf{x}}$$
+
+where $\alpha = \sigma \sqrt{2 \ln(1/\delta)}$ controls the confidence level.
+
+### The LinUCB Selection Rule
+
+$$a_t = \arg\max_a \left[ \underbrace{\mathbf{x}_t^T \hat{\theta}_a}_{\text{exploitation}} + \underbrace{\alpha \sqrt{\mathbf{x}_t^T A_a^{-1} \mathbf{x}_t}}_{\text{exploration bonus}} \right]$$
+
+**Interpretation**:
+- First term: Expected reward given current estimates (exploit what we know)
+- Second term: Uncertainty in prediction (explore where uncertain)
+
+### Why the Exploration Bonus Works
+
+The term $\sqrt{\mathbf{x}^T A_a^{-1} \mathbf{x}}$ is geometrically meaningful:
+
+$$||\mathbf{x}||_{A_a^{-1}} = \sqrt{\mathbf{x}^T A_a^{-1} \mathbf{x}}$$
+
+This is the **Mahalanobis norm** of $\mathbf{x}$ with respect to $A_a^{-1}$.
+
+**Properties**:
+- Large when $\mathbf{x}$ is "far" from previously observed contexts for arm $a$
+- Small when we've seen many contexts similar to $\mathbf{x}$ for arm $a$
+- Automatically adapts exploration to feature space geometry
+
+*"This is the beauty of LinUCB: it explores in directions where we're uncertain, not uniformly at random like epsilon-greedy."*
+
 ---
 
-### Implementation
+## Numerical Walkthrough: LinUCB in Action
+
+*"Let me trace LinUCB through 10 rounds with concrete numbers. This is where the algorithm comes alive."*
+
+### Setup
+
+- **Users**: 3 users with different contexts
+- **Arms**: 2 arms (articles)
+- **Context dimension**: $d = 2$ (plus intercept = 3)
+- **Exploration parameter**: $\alpha = 1.0$
+- **Regularization**: $\lambda = 1.0$ (implicit in $A_a$ initialization)
+
+**User Contexts** (repeated cyclically):
+```
+User 1: x_1 = [0.9, 0.1, 1.0]  (tech enthusiast)
+User 2: x_2 = [0.1, 0.9, 1.0]  (sports fan)
+User 3: x_3 = [0.5, 0.5, 1.0]  (balanced interests)
+```
+
+**True Parameters** (unknown to algorithm):
+```
+Arm 0 (Tech article):   theta_0* = [0.8, 0.1, 0.2]
+Arm 1 (Sports article): theta_1* = [0.1, 0.9, 0.1]
+```
+
+**True Expected Rewards**:
+```
+User 1 + Arm 0: 0.9*0.8 + 0.1*0.1 + 1.0*0.2 = 0.93
+User 1 + Arm 1: 0.9*0.1 + 0.1*0.9 + 1.0*0.1 = 0.28
+User 2 + Arm 0: 0.1*0.8 + 0.9*0.1 + 1.0*0.2 = 0.37
+User 2 + Arm 1: 0.1*0.1 + 0.9*0.9 + 1.0*0.1 = 0.92
+User 3 + Arm 0: 0.5*0.8 + 0.5*0.1 + 1.0*0.2 = 0.65
+User 3 + Arm 1: 0.5*0.1 + 0.5*0.9 + 1.0*0.1 = 0.60
+```
+
+### Initialization (t = 0)
+
+```
+A_0 = A_1 = I_3 = [[1, 0, 0],
+                   [0, 1, 0],
+                   [0, 0, 1]]
+
+b_0 = b_1 = [0, 0, 0]
+
+theta_hat_0 = A_0^{-1} b_0 = [0, 0, 0]
+theta_hat_1 = A_1^{-1} b_1 = [0, 0, 0]
+```
+
+### Round 1: User 1 arrives
+
+**Context**: $\mathbf{x}_1 = [0.9, 0.1, 1.0]$
+
+**Compute UCB for each arm**:
+
+```
+Arm 0:
+  Mean = x_1^T theta_hat_0 = [0.9, 0.1, 1.0] . [0, 0, 0] = 0
+  Variance = x_1^T A_0^{-1} x_1 = x_1^T I x_1 = 0.81 + 0.01 + 1.0 = 1.82
+  UCB_0 = 0 + 1.0 * sqrt(1.82) = 1.35
+
+Arm 1:
+  Mean = x_1^T theta_hat_1 = 0
+  Variance = x_1^T A_1^{-1} x_1 = 1.82
+  UCB_1 = 0 + 1.0 * sqrt(1.82) = 1.35
+```
+
+**Action**: Tie-break randomly. Select Arm 0.
+
+**Observe reward**: $r_1 = 0.93 + \epsilon_1 \approx 0.95$ (with noise)
+
+**Update Arm 0**:
+```
+A_0 = A_0 + x_1 x_1^T
+    = I + [[0.81, 0.09, 0.9],
+           [0.09, 0.01, 0.1],
+           [0.9,  0.1,  1.0]]
+    = [[1.81, 0.09, 0.9],
+       [0.09, 1.01, 0.1],
+       [0.9,  0.1,  2.0]]
+
+b_0 = b_0 + r_1 * x_1 = [0, 0, 0] + 0.95 * [0.9, 0.1, 1.0]
+    = [0.855, 0.095, 0.95]
+```
+
+### Round 2: User 2 arrives
+
+**Context**: $\mathbf{x}_2 = [0.1, 0.9, 1.0]$
+
+**Compute $\hat{\theta}_0$** (need to invert $A_0$):
+```
+theta_hat_0 = A_0^{-1} b_0 = [0.42, 0.04, 0.29] (approximately)
+```
+
+**Compute UCB**:
+```
+Arm 0:
+  Mean = [0.1, 0.9, 1.0] . [0.42, 0.04, 0.29] = 0.042 + 0.036 + 0.29 = 0.37
+  Variance = x_2^T A_0^{-1} x_2 (need full matrix inverse)
+  After computation: UCB_0 = 0.37 + 1.0 * 1.01 = 1.38
+
+Arm 1:
+  Mean = 0 (still no data)
+  Variance = 1.82 (unchanged)
+  UCB_1 = 0 + 1.35 = 1.35
+```
+
+**Action**: Select Arm 0 (UCB_0 > UCB_1)
+
+**Observe reward**: $r_2 = 0.37 + \epsilon_2 \approx 0.35$
+
+**Update Arm 0** (further refines estimates)
+
+### Rounds 3-10: Pattern Emerges
+
+After several rounds, the algorithm learns:
+
+| Round | User | Selected Arm | Reward | Notes |
+|-------|------|--------------|--------|-------|
+| 1 | 1 | 0 | 0.95 | Initial exploration |
+| 2 | 2 | 0 | 0.35 | UCB favors Arm 0 |
+| 3 | 3 | 1 | 0.62 | Explores Arm 1 (high uncertainty) |
+| 4 | 1 | 0 | 0.91 | Exploits - learned tech user likes Arm 0 |
+| 5 | 2 | 1 | 0.89 | Now tries Arm 1 for sports user |
+| 6 | 3 | 0 | 0.67 | Continues learning |
+| 7 | 1 | 0 | 0.94 | Strong exploitation |
+| 8 | 2 | 1 | 0.93 | Learned sports user likes Arm 1 |
+| 9 | 3 | 0 | 0.63 | Slight preference emerging |
+| 10 | 1 | 0 | 0.92 | Consistent exploitation |
+
+**Final Learned Parameters** (after 10 rounds):
+```
+theta_hat_0 = [0.75, 0.15, 0.22]  (true: [0.8, 0.1, 0.2])
+theta_hat_1 = [0.08, 0.85, 0.12]  (true: [0.1, 0.9, 0.1])
+```
+
+*"Notice how the algorithm automatically figures out that User 1 should see Arm 0 and User 2 should see Arm 1, without us explicitly programming this logic."*
+
+---
+
+## LinUCB Implementation
 
 ```python
 import numpy as np
@@ -108,30 +386,31 @@ class LinUCB:
 
         n_arms: Number of arms (actions)
         n_features: Dimension of context vector
-        alpha: Exploration parameter
+        alpha: Exploration parameter (controls width of confidence interval)
         """
         self.n_arms = n_arms
         self.n_features = n_features
         self.alpha = alpha
 
-        # Initialize for each arm
-        self.A = [np.identity(n_features) for _ in range(n_arms)]  # Precision matrices
-        self.b = [np.zeros(n_features) for _ in range(n_arms)]     # Accumulated rewards
+        # Initialize for each arm: A_a = I, b_a = 0
+        self.A = [np.identity(n_features) for _ in range(n_arms)]
+        self.b = [np.zeros(n_features) for _ in range(n_arms)]
 
     def select_arm(self, context):
         """
-        Select arm given context.
+        Select arm given context using UCB.
 
         context: (n_features,) numpy array
+        Returns: selected arm index
         """
         ucb_values = np.zeros(self.n_arms)
 
         for a in range(self.n_arms):
-            # Estimate theta
+            # Compute theta_hat = A^{-1} b
             A_inv = np.linalg.inv(self.A[a])
             theta_hat = A_inv @ self.b[a]
 
-            # UCB value
+            # UCB = mean + alpha * std
             mean = theta_hat.T @ context
             std = np.sqrt(context.T @ A_inv @ context)
             ucb_values[a] = mean + self.alpha * std
@@ -146,190 +425,143 @@ class LinUCB:
         context: (n_features,) numpy array
         reward: Observed reward
         """
+        # A_a <- A_a + x x^T
         self.A[arm] += np.outer(context, context)
+        # b_a <- b_a + r * x
         self.b[arm] += reward * context
 
+    def get_theta(self, arm):
+        """Get current parameter estimate for an arm."""
+        return np.linalg.inv(self.A[arm]) @ self.b[arm]
 
-# Example
-n_arms = 3
-n_features = 5
-bandit = LinUCB(n_arms, n_features, alpha=0.5)
 
-# Simulate interactions
-for t in range(100):
-    # Random context
-    context = np.random.randn(n_features)
+# Example: 3 users, 2 arms, demonstrating personalization
+np.random.seed(42)
+
+n_arms = 2
+n_features = 3  # 2 features + intercept
+bandit = LinUCB(n_arms, n_features, alpha=1.0)
+
+# User contexts (repeated)
+users = [
+    np.array([0.9, 0.1, 1.0]),  # Tech enthusiast
+    np.array([0.1, 0.9, 1.0]),  # Sports fan
+    np.array([0.5, 0.5, 1.0]),  # Balanced
+]
+
+# True parameters (unknown to algorithm)
+true_theta = [
+    np.array([0.8, 0.1, 0.2]),  # Arm 0: Tech article
+    np.array([0.1, 0.9, 0.1]),  # Arm 1: Sports article
+]
+
+# Simulate 30 rounds
+for t in range(30):
+    # Cycle through users
+    user_idx = t % 3
+    context = users[user_idx]
 
     # Select arm
     arm = bandit.select_arm(context)
 
-    # Simulate reward (true params unknown to algorithm)
-    true_theta = np.random.randn(n_features)  # Different for each arm
-    reward = context.T @ true_theta + 0.1 * np.random.randn()
+    # Generate reward
+    true_reward = context @ true_theta[arm]
+    reward = true_reward + 0.1 * np.random.randn()
 
     # Update
     bandit.update(arm, context, reward)
 
-print("Learned parameters (theta) for each arm:")
+print("Learned parameters:")
 for a in range(n_arms):
-    theta_hat = np.linalg.inv(bandit.A[a]) @ bandit.b[a]
-    print(f"Arm {a}: {theta_hat}")
+    print(f"Arm {a}: {bandit.get_theta(a)}")
+    print(f"  True: {true_theta[a]}")
 ```
 
 ---
 
-## Neural Contextual Bandits
+## Thompson Sampling with Context: Posterior Update Derivation
 
-### Motivation
+*"Thompson Sampling offers a Bayesian alternative to UCB. Let me derive the posterior updates for linear models."*
 
-**LinUCB limitation**: Assumes linear rewards.
+### The Bayesian Linear Model
 
-**Reality**: Rewards often non-linear (e.g., interactions between features).
+**Model**:
+$$r = \mathbf{x}^T \theta_a + \epsilon, \quad \epsilon \sim \mathcal{N}(0, \sigma^2)$$
 
-**Solution**: **Neural networks** to model $f(\mathbf{x}, a)$.
+**Prior**:
+$$\theta_a \sim \mathcal{N}(\mathbf{m}_0, \Sigma_0)$$
 
----
+Typically: $\mathbf{m}_0 = \mathbf{0}$, $\Sigma_0 = \lambda^{-1} I$ (weak prior)
 
-### Neural ε-Greedy
+### Posterior Derivation
 
-**Simplest approach**: Use neural network + ε-greedy exploration.
+After observing data $\mathcal{D}_a = \{(\mathbf{x}_s, r_s)\}_{s: a_s = a}$:
 
-**Architecture**:
-```
-Context x ──→ Neural Network ──→ Q(x, a₁), Q(x, a₂), ..., Q(x, aₖ)
-```
+**Likelihood**:
+$$p(\mathcal{D}_a | \theta_a) \propto \exp\left( -\frac{1}{2\sigma^2} \sum_s (r_s - \mathbf{x}_s^T \theta_a)^2 \right)$$
 
-**Selection**:
-- With probability $\varepsilon$: Random arm
-- Otherwise: $\arg\max_a Q(\mathbf{x}, a)$
+**Prior**:
+$$p(\theta_a) \propto \exp\left( -\frac{1}{2} (\theta_a - \mathbf{m}_0)^T \Sigma_0^{-1} (\theta_a - \mathbf{m}_0) \right)$$
 
-**Update**: Gradient descent on prediction error.
-
----
-
-### Implementation
-
-```python
-import torch
-import torch.nn as nn
-import torch.optim as optim
-
-class NeuralContextualBandit:
-    def __init__(self, n_arms, n_features, hidden_dim=64, epsilon=0.1, lr=0.01):
-        """
-        Neural contextual bandit with ε-greedy.
-        """
-        self.n_arms = n_arms
-        self.epsilon = epsilon
-
-        # Neural network
-        self.model = nn.Sequential(
-            nn.Linear(n_features, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, n_arms)  # Output: Q-values for each arm
-        )
-
-        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
-        self.loss_fn = nn.MSELoss()
-
-    def select_arm(self, context):
-        """
-        Select arm using ε-greedy.
-
-        context: (n_features,) numpy array
-        """
-        if np.random.rand() < self.epsilon:
-            return np.random.randint(self.n_arms)
-
-        with torch.no_grad():
-            context_tensor = torch.FloatTensor(context).unsqueeze(0)
-            q_values = self.model(context_tensor).squeeze()
-            return torch.argmax(q_values).item()
-
-    def update(self, arm, context, reward):
-        """
-        Update neural network.
-        """
-        context_tensor = torch.FloatTensor(context).unsqueeze(0)
-        q_values = self.model(context_tensor).squeeze()
-
-        # Target: observed reward for chosen arm, keep others as predicted
-        target = q_values.clone().detach()
-        target[arm] = reward
-
-        # Loss and backprop
-        loss = self.loss_fn(q_values, target)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-
-# Example
-bandit = NeuralContextualBandit(n_arms=5, n_features=10, epsilon=0.1)
-
-for t in range(1000):
-    context = np.random.randn(10)
-    arm = bandit.select_arm(context)
-
-    # Simulate reward
-    true_value = np.sum(context[:5]) * (arm / 5.0)  # Non-linear
-    reward = true_value + 0.1 * np.random.randn()
-
-    bandit.update(arm, context, reward)
-```
-
----
-
-## Thompson Sampling for Contextual Bandits
-
-### Bayesian Linear Regression
-
-**Model**: $r = \mathbf{x}^T \theta + \epsilon$, where $\epsilon \sim \mathcal{N}(0, \sigma^2)$.
-
-**Prior**: $\theta \sim \mathcal{N}(\mathbf{m}_0, \Sigma_0)$
-
-**Posterior** (after observing data):
-$$\theta | \mathcal{D} \sim \mathcal{N}(\mathbf{m}_a, \Sigma_a)$$
+**Posterior** (by completing the square):
+$$\theta_a | \mathcal{D}_a \sim \mathcal{N}(\mathbf{m}_a, \Sigma_a)$$
 
 where:
-$$\Sigma_a = \left( \Sigma_0^{-1} + \frac{1}{\sigma^2} \sum_t \mathbf{x}_t \mathbf{x}_t^T \right)^{-1}$$
-$$\mathbf{m}_a = \Sigma_a \left( \Sigma_0^{-1} \mathbf{m}_0 + \frac{1}{\sigma^2} \sum_t r_t \mathbf{x}_t \right)$$
+$$\Sigma_a^{-1} = \Sigma_0^{-1} + \frac{1}{\sigma^2} \sum_s \mathbf{x}_s \mathbf{x}_s^T = \Sigma_0^{-1} + \frac{1}{\sigma^2} A_a$$
 
----
+$$\mathbf{m}_a = \Sigma_a \left( \Sigma_0^{-1} \mathbf{m}_0 + \frac{1}{\sigma^2} \sum_s r_s \mathbf{x}_s \right) = \Sigma_a \left( \Sigma_0^{-1} \mathbf{m}_0 + \frac{1}{\sigma^2} \mathbf{b}_a \right)$$
+
+### Incremental Updates
+
+When a new observation $(\mathbf{x}_t, r_t)$ arrives for arm $a$:
+
+**Precision update** (addition is easy):
+$$\Sigma_a^{-1} \leftarrow \Sigma_a^{-1} + \frac{1}{\sigma^2} \mathbf{x}_t \mathbf{x}_t^T$$
+
+**Information vector update**:
+$$\Sigma_a^{-1} \mathbf{m}_a \leftarrow \Sigma_a^{-1} \mathbf{m}_a + \frac{r_t}{\sigma^2} \mathbf{x}_t$$
 
 ### Thompson Sampling Algorithm
 
-**Selection**:
-1. For each arm $a$, sample $\tilde{\theta}_a \sim \mathcal{N}(\mathbf{m}_a, \Sigma_a)$
-2. Compute $\tilde{r}_a = \mathbf{x}^T \tilde{\theta}_a$
-3. Choose arm with highest sampled reward
-
-**Update**: Update posterior with observed $(x, a, r)$.
-
----
+```
+For each round t:
+  1. Observe context x_t
+  2. For each arm a:
+     - Sample theta_tilde_a ~ N(m_a, Sigma_a)
+     - Compute sampled reward: r_tilde_a = x_t^T theta_tilde_a
+  3. Choose arm: a_t = argmax_a r_tilde_a
+  4. Observe reward r_t
+  5. Update posterior for arm a_t
+```
 
 ### Implementation
 
 ```python
 class LinearThompsonSampling:
-    def __init__(self, n_arms, n_features, sigma=1.0):
+    def __init__(self, n_arms, n_features, sigma=1.0, lambda_prior=1.0):
         """
         Thompson Sampling for linear contextual bandits.
+
+        sigma: Noise standard deviation
+        lambda_prior: Prior precision (lambda_prior * I is prior precision)
         """
         self.n_arms = n_arms
         self.n_features = n_features
         self.sigma = sigma
+        self.sigma_sq = sigma ** 2
 
         # Posterior parameters for each arm
+        # Start with prior N(0, lambda_prior^{-1} I)
         self.mu = [np.zeros(n_features) for _ in range(n_arms)]
-        self.cov = [np.identity(n_features) for _ in range(n_arms)]
+        self.cov = [np.eye(n_features) / lambda_prior for _ in range(n_arms)]
+
+        # Store precision for efficient updates
+        self.precision = [lambda_prior * np.eye(n_features) for _ in range(n_arms)]
+        self.precision_times_mu = [np.zeros(n_features) for _ in range(n_arms)]
 
     def select_arm(self, context):
         """
-        Sample theta from posterior and choose best arm.
+        Sample from posterior and choose best arm.
         """
         sampled_rewards = []
 
@@ -345,22 +577,17 @@ class LinearThompsonSampling:
 
     def update(self, arm, context, reward):
         """
-        Bayesian update of posterior.
+        Bayesian posterior update.
         """
-        # Precision (inverse covariance)
-        precision = np.linalg.inv(self.cov[arm])
+        # Update precision: Lambda <- Lambda + x x^T / sigma^2
+        self.precision[arm] += np.outer(context, context) / self.sigma_sq
 
-        # Update precision
-        precision_new = precision + (1 / self.sigma**2) * np.outer(context, context)
+        # Update precision * mu: Lambda * mu <- Lambda * mu + r * x / sigma^2
+        self.precision_times_mu[arm] += reward * context / self.sigma_sq
 
-        # Update covariance
-        self.cov[arm] = np.linalg.inv(precision_new)
-
-        # Update mean
-        precision_times_mu = precision @ self.mu[arm]
-        precision_times_mu_new = precision_times_mu + (reward / self.sigma**2) * context
-
-        self.mu[arm] = self.cov[arm] @ precision_times_mu_new
+        # Compute covariance and mean
+        self.cov[arm] = np.linalg.inv(self.precision[arm])
+        self.mu[arm] = self.cov[arm] @ self.precision_times_mu[arm]
 
 
 # Example
@@ -376,10 +603,398 @@ for t in range(500):
 
     bandit.update(arm, context, reward)
 
-print("Learned theta:")
+print("Posterior means (should converge to true theta for selected arm):")
 for a in range(3):
     print(f"Arm {a}: {bandit.mu[a]}")
 ```
+
+**Socratic Pause**: *"LinUCB and Thompson Sampling both achieve optimal regret bounds. When would you prefer one over the other?"*
+
+**Answer hints**:
+- Thompson Sampling: More computationally expensive (sampling), but often better empirical performance
+- LinUCB: Deterministic, easier to debug and explain
+- Thompson Sampling: Naturally handles batched updates (sample once, recommend to batch)
+
+---
+
+## Disjoint vs Hybrid Models: When to Share Parameters
+
+*"So far, each arm has completely separate parameters. But what if arms share some structure?"*
+
+### The Disjoint Model (What We've Seen)
+
+**Model**:
+$$r_t = \mathbf{x}_t^T \theta_{a_t}^* + \epsilon_t$$
+
+**Parameters**: Separate $\theta_a$ for each arm
+
+**Number of parameters**: $K \times d$ (K arms, d features)
+
+**When it works well**:
+- Arms are fundamentally different (tech article vs. sports article)
+- Enough data per arm to estimate parameters reliably
+
+**When it struggles**:
+- Many arms with sparse data per arm
+- Arms share common structure (all are articles with similar features)
+
+### The Hybrid Model
+
+*"What if user preferences have a common component plus arm-specific effects?"*
+
+**Model**:
+$$r_t = \mathbf{x}_t^T \theta^* + \mathbf{x}_t^T \beta_{a_t}^* + \mathbf{z}_{a_t}^T \gamma^* + \epsilon_t$$
+
+Or equivalently:
+$$r_t = \mathbf{x}_t^T \theta^* + \mathbf{w}_{t,a_t}^T \alpha_{a_t}^* + \epsilon_t$$
+
+where:
+- $\theta^*$: **Shared parameters** (common user preferences)
+- $\beta_a^*$: **Arm-specific user effects** (how this user responds to arm $a$)
+- $\gamma^*$: **Arm feature effects** (arm's inherent appeal)
+- $\mathbf{z}_a$: **Arm features** (article category, recency, etc.)
+
+### Deriving the Tradeoff
+
+**Disjoint Model Variance**:
+
+For arm $a$ with $n_a$ observations:
+$$\text{Var}(\hat{\theta}_a) \approx \frac{\sigma^2}{n_a} I$$
+
+If total observations $T$ spread across $K$ arms: $n_a \approx T/K$
+
+$$\text{Var}(\hat{\theta}_a) \approx \frac{K \sigma^2}{T} I$$
+
+**Hybrid Model Variance** (for shared component):
+
+All $T$ observations contribute to shared parameters:
+$$\text{Var}(\hat{\theta}) \approx \frac{\sigma^2}{T} I$$
+
+**The Tradeoff**:
+
+| Aspect | Disjoint | Hybrid |
+|--------|----------|--------|
+| Variance (shared) | High ($\propto K/T$) | Low ($\propto 1/T$) |
+| Bias | Low (flexible) | Higher if model wrong |
+| Data efficiency | Low | High |
+| Expressiveness | High | Constrained |
+
+### Hybrid LinUCB
+
+**Combined feature vector**:
+$$\mathbf{u}_{t,a} = [\mathbf{z}_a^T \otimes \mathbf{x}_t^T, \mathbf{x}_t^T]^T$$
+
+where $\mathbf{z}_a$ are arm features and $\otimes$ is the Kronecker product (or just concatenation).
+
+**Update**: Same as standard LinUCB but with combined features.
+
+**Implementation Sketch**:
+```python
+class HybridLinUCB:
+    def __init__(self, n_arms, d_user, d_arm, alpha=1.0):
+        """
+        Hybrid LinUCB with shared + arm-specific parameters.
+
+        d_user: User context dimension
+        d_arm: Arm feature dimension
+        """
+        self.n_arms = n_arms
+        self.alpha = alpha
+
+        # Shared parameters (for z_a features)
+        d_shared = d_arm
+        self.A_0 = np.eye(d_shared)
+        self.b_0 = np.zeros(d_shared)
+
+        # Arm-specific parameters
+        self.A = [np.eye(d_user) for _ in range(n_arms)]
+        self.B = [np.zeros((d_user, d_shared)) for _ in range(n_arms)]
+        self.b = [np.zeros(d_user) for _ in range(n_arms)]
+
+    def select_arm(self, x_user, z_arms):
+        """
+        x_user: User context (d_user,)
+        z_arms: Arm features (n_arms, d_arm)
+        """
+        # Compute shared parameter estimate
+        A_0_inv = np.linalg.inv(self.A_0)
+        beta_hat = A_0_inv @ self.b_0
+
+        ucb_values = []
+        for a in range(self.n_arms):
+            A_inv = np.linalg.inv(self.A[a])
+            theta_hat = A_inv @ (self.b[a] - self.B[a] @ beta_hat)
+
+            # UCB computation (simplified)
+            mean = z_arms[a] @ beta_hat + x_user @ theta_hat
+            # Variance computation involves both A and A_0 (omitted for brevity)
+            std = self.alpha * np.sqrt(x_user @ A_inv @ x_user)  # Simplified
+
+            ucb_values.append(mean + std)
+
+        return np.argmax(ucb_values)
+```
+
+**When to use Hybrid**:
+- Large action space with sparse rewards per action
+- Arms have meaningful features (categories, metadata)
+- Shared structure across arms is reasonable assumption
+
+---
+
+## Neural Contextual Bandits
+
+### Motivation
+
+**LinUCB limitation**: Assumes linear rewards.
+
+**Reality**: Rewards often non-linear (e.g., interactions between features).
+
+**Solution**: **Neural networks** to model $f(\mathbf{x}, a)$.
+
+### Neural Epsilon-Greedy
+
+**Simplest approach**: Use neural network + epsilon-greedy exploration.
+
+**Architecture**:
+```
+Context x --> Neural Network --> Q(x, a_1), Q(x, a_2), ..., Q(x, a_k)
+```
+
+**Selection**:
+- With probability $\varepsilon$: Random arm
+- Otherwise: $\arg\max_a Q(\mathbf{x}, a)$
+
+**Update**: Gradient descent on prediction error.
+
+### Implementation
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+class NeuralContextualBandit:
+    def __init__(self, n_arms, n_features, hidden_dim=64, epsilon=0.1, lr=0.01):
+        """
+        Neural contextual bandit with epsilon-greedy.
+        """
+        self.n_arms = n_arms
+        self.epsilon = epsilon
+
+        # Neural network: context -> Q-values for all arms
+        self.model = nn.Sequential(
+            nn.Linear(n_features, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, n_arms)
+        )
+
+        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
+        self.loss_fn = nn.MSELoss()
+
+    def select_arm(self, context):
+        """
+        Select arm using epsilon-greedy.
+        """
+        if np.random.rand() < self.epsilon:
+            return np.random.randint(self.n_arms)
+
+        with torch.no_grad():
+            context_tensor = torch.FloatTensor(context).unsqueeze(0)
+            q_values = self.model(context_tensor).squeeze()
+            return torch.argmax(q_values).item()
+
+    def update(self, arm, context, reward):
+        """
+        Update neural network with observed reward.
+        """
+        context_tensor = torch.FloatTensor(context).unsqueeze(0)
+        q_values = self.model(context_tensor).squeeze()
+
+        # Target: observed reward for chosen arm
+        target = q_values.clone().detach()
+        target[arm] = reward
+
+        loss = self.loss_fn(q_values, target)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+
+# Example with non-linear rewards
+bandit = NeuralContextualBandit(n_arms=5, n_features=10, epsilon=0.1)
+
+for t in range(1000):
+    context = np.random.randn(10)
+
+    arm = bandit.select_arm(context)
+
+    # Non-linear reward function
+    true_value = np.sum(context[:5]) * (arm / 5.0) + np.sin(context[0] * context[1])
+    reward = true_value + 0.1 * np.random.randn()
+
+    bandit.update(arm, context, reward)
+```
+
+---
+
+## What Can Go Wrong: Practical Pitfalls
+
+*"Theory gives us beautiful algorithms. Practice gives us headaches. Let me warn you about what can go wrong."*
+
+### 1. Feature Engineering Failures
+
+**Problem**: LinUCB assumes reward is linear in provided features.
+
+**What goes wrong**:
+```
+True reward = x_1 * x_2 (interaction effect)
+Features provided = [x_1, x_2] (no interaction term)
+
+LinUCB learns: r = theta_1 * x_1 + theta_2 * x_2
+But this cannot capture the multiplicative interaction!
+```
+
+**Symptoms**:
+- High regret that doesn't decrease
+- Learned parameters don't make sense
+- Poor performance compared to simpler baselines
+
+**Solutions**:
+- Feature engineering: Add interaction terms, polynomial features
+- Use neural bandits for automatic feature learning
+- Validate linearity assumption before deploying
+
+**Socratic Pause**: *"If you suspect non-linearity, how would you diagnose it? What plots or tests would reveal the problem?"*
+
+### 2. Non-Linear Reward Functions
+
+**The Deeper Problem**:
+
+Even with feature engineering, some patterns are hard to capture:
+```
+User likes action movies AND comedies, but NOT action-comedies
+r(action) = 0.8
+r(comedy) = 0.7
+r(action-comedy) = 0.2  (not 0.75 as linear model predicts!)
+```
+
+**Mathematical Limitation**:
+
+LinUCB regret bound assumes:
+$$|r - \mathbf{x}^T \theta^*| \leq \epsilon \quad \text{(bounded misspecification)}$$
+
+If misspecification is large, regret can be linear in $T$!
+
+**Solutions**:
+- Neural contextual bandits (NeuralUCB, Neural Thompson Sampling)
+- Kernel methods (kernelized UCB)
+- Ensemble methods
+
+### 3. Delayed Feedback
+
+**The Problem**: In real systems, rewards are often delayed.
+
+**Example** (E-commerce):
+```
+t=1: Show product A to user
+t=2: Show product B to different user
+...
+t=100: User from t=1 finally purchases product A
+
+Question: When do we update? With which context?
+```
+
+**What can go wrong**:
+- Stale updates: Context at update time differs from context at decision time
+- Attribution errors: Did they buy because of our recommendation or external factors?
+- Batch updates: Lose real-time adaptability
+
+**Solutions**:
+- Use context at decision time, not update time
+- Discount delayed rewards
+- Account for delay distribution in exploration
+
+### 4. Non-Stationarity
+
+**The Problem**: User preferences and arm rewards change over time.
+
+**Examples**:
+- News: Article relevance decays rapidly
+- Fashion: Trends change seasonally
+- User lifecycle: Preferences evolve with experience
+
+**What goes wrong with standard LinUCB**:
+```
+True theta at t=1000:   [0.8, 0.2]
+True theta at t=10000:  [0.3, 0.7]  (preferences shifted!)
+
+LinUCB with all historical data: theta_hat = [0.55, 0.45] (average, not current)
+```
+
+**Solutions**:
+
+**Sliding window**:
+```python
+class SlidingWindowLinUCB:
+    def __init__(self, window_size=1000, ...):
+        self.window_size = window_size
+        self.history = []  # Store (context, arm, reward) tuples
+
+    def update(self, arm, context, reward):
+        self.history.append((context, arm, reward))
+        if len(self.history) > self.window_size:
+            self.history.pop(0)
+        self._recompute_from_history()
+```
+
+**Discounting**:
+```python
+class DiscountedLinUCB:
+    def __init__(self, gamma=0.99, ...):
+        self.gamma = gamma
+
+    def update(self, arm, context, reward):
+        # Discount existing data
+        self.A[arm] = self.gamma * self.A[arm] + np.outer(context, context)
+        self.b[arm] = self.gamma * self.b[arm] + reward * context
+```
+
+### 5. Context Distribution Shift
+
+**Problem**: Training and deployment contexts differ.
+
+```
+Training: Users from US, ages 25-35
+Deployment: Expanding to users from Japan, ages 18-65
+
+Learned parameters may not transfer!
+```
+
+**Detection**:
+- Monitor feature distributions over time
+- Track prediction confidence (UCB width)
+- A/B test against simple baselines
+
+### 6. Arm Set Changes
+
+**Problem**: New arms appear, old arms disappear.
+
+**New arm cold start**:
+- No data -> high uncertainty -> will be explored
+- But exploration might be slow for large action spaces
+
+**Arm removal**:
+- Don't recommend removed items!
+- But learned parameters might still be useful for similar items
+
+**Solutions**:
+- Hybrid models: Transfer shared parameters to new arms
+- Meta-learning: Learn to initialize new arm parameters
+- Feature-based: If new arm has similar features, bootstrap from similar arms
 
 ---
 
@@ -387,13 +1002,11 @@ for a in range(3):
 
 ### Problem
 
-**Online learning**: Test new policy on real users → risky (bad policy = lost revenue).
+**Online learning**: Test new policy on real users -> risky (bad policy = lost revenue).
 
 **Offline evaluation**: Estimate new policy performance from **logged data** (past interactions).
 
 **Challenge**: Logged data collected by old policy $\pi_0$, want to evaluate new policy $\pi_1$.
-
----
 
 ### Inverse Propensity Scoring (IPS)
 
@@ -407,8 +1020,6 @@ where:
 - $\pi_1(\mathbf{x})$ = new policy's choice
 
 **Interpretation**: If new policy would've chosen same arm, upweight reward by inverse probability.
-
----
 
 ### Doubly Robust Estimator
 
@@ -430,8 +1041,6 @@ $$\hat{V}_{\text{DR}}(\pi_1) = \frac{1}{T} \sum_{t=1}^T \left[ \hat{r}(\mathbf{x
 
 **Trade-off**: Slower learning vs. lower compute cost.
 
----
-
 ### Warm Start
 
 **Problem**: New bandit starts with no data (random exploration).
@@ -452,21 +1061,19 @@ for i in range(len(X_train)):
 # Now deploy for live traffic
 ```
 
----
-
 ### A/B Testing Bandits
 
 **Scenario**: Compare bandit vs. existing system.
 
 **Setup**:
-- 90% traffic → existing system (control)
-- 10% traffic → bandit (treatment)
+- 90% traffic -> existing system (control)
+- 10% traffic -> bandit (treatment)
 
 **Metrics**:
 - CTR, revenue, user engagement
 - Statistical significance (t-test)
 
-**Decision**: If bandit wins, gradually increase traffic (10% → 50% → 100%).
+**Decision**: If bandit wins, gradually increase traffic (10% -> 50% -> 100%).
 
 ---
 
@@ -477,8 +1084,6 @@ for i in range(len(X_train)):
 **Yahoo! Front Page**: Show 1 article from pool of ~20.
 
 **Challenge**: Which article to show each user?
-
----
 
 ### Solution: LinUCB
 
@@ -500,42 +1105,59 @@ for i in range(len(X_train)):
 ## Summary
 
 **Key Takeaways**:
-1. **Contextual bandits**: Personalize arm selection based on context
-2. **LinUCB**: Linear rewards, confidence-based exploration
-3. **Neural**: Non-linear rewards with deep networks
-4. **Thompson Sampling**: Bayesian approach, sample from posterior
-5. **Off-policy evaluation**: IPS, doubly robust for safe testing
+1. **Context matters**: Same exploration for all users is suboptimal
+2. **LinUCB**: Linear rewards + confidence-based exploration with regret $O(\sqrt{T})$
+3. **Thompson Sampling**: Bayesian alternative, often better empirical performance
+4. **Hybrid models**: Share parameters when arms have common structure
+5. **Practical pitfalls**: Non-linearity, delayed feedback, non-stationarity
+
+**The Evolution**:
+```
+epsilon-greedy        --> UCB              --> LinUCB
+(ignore context)         (context-free)       (context-aware)
+                                                   |
+                                                   v
+                                         Neural Contextual Bandits
+                                         (non-linear rewards)
+```
 
 **Best Practices**:
-- **Start with LinUCB**: Strong baseline, interpretable
-- **Use neural for complex patterns**: User-item interactions
-- **Warm start**: Pre-train on historical data
-- **Off-policy eval**: Test new policies safely
-- **Batch updates**: Balance learning speed vs. cost
+- **Start with LinUCB**: Strong baseline, interpretable, well-understood
+- **Add complexity as needed**: Neural if non-linear patterns evident
+- **Monitor in production**: Track regret, feature distributions, arm performance
+- **Off-policy evaluation**: Test new policies safely before deployment
 
-**When to use**:
+**When to use contextual bandits**:
 - **Personalization**: Different users prefer different items
-- **Rich features**: User demographics, item attributes
-- **Real-time**: Online learning from user feedback
-- **Exploration**: Need to try new items
+- **Rich features**: User demographics, item attributes, contextual signals
+- **Real-time feedback**: Online learning from user interactions
+- **Exploration needed**: Cold start items, changing preferences
 
-**Next**: Reinforcement learning for long-term optimization.
+**Final Socratic Question**: *"You've learned LinUCB and Thompson Sampling. But what if you have 1 million items (arms)? Computing UCB for each arm becomes infeasible. How would you modify the algorithm?"*
+
+**Hint**: This leads to two-stage systems (candidate generation + ranking), which is exactly how industrial recommendation systems work.
 
 ---
 
 ## References
 
 1. **Li, L., et al. (2010)**. "A Contextual-Bandit Approach to Personalized News Article Recommendation". *WWW*.
-   - **LinUCB**, Yahoo! News
+   - **LinUCB**, Yahoo! News, hybrid model
 
-2. **Agrawal, S., & Goyal, N. (2013)**. "Thompson Sampling for Contextual Bandits with Linear Payoffs". *ICML*.
-   - **Thompson Sampling for linear contextual bandits**
+2. **Agrawal, S., and Goyal, N. (2013)**. "Thompson Sampling for Contextual Bandits with Linear Payoffs". *ICML*.
+   - **Thompson Sampling for linear contextual bandits**, regret bounds
 
-3. **Dudík, M., et al. (2014)**. "Doubly Robust Policy Evaluation and Optimization". *Statistical Science*.
-   - **Doubly robust estimator**
+3. **Chu, W., et al. (2011)**. "Contextual Bandits with Linear Payoff Functions". *AISTATS*.
+   - **LinUCB analysis**, confidence ellipsoid interpretation
 
-4. **Riquelme, C., et al. (2018)**. "Deep Bayesian Bandits Showdown". *ICLR*.
-   - **Neural contextual bandits comparison**
+4. **Dudik, M., et al. (2014)**. "Doubly Robust Policy Evaluation and Optimization". *Statistical Science*.
+   - **Doubly robust estimator**, off-policy evaluation
 
-5. **Zhou, D., et al. (2020)**. "Neural Contextual Bandits with UCB-based Exploration". *ICML*.
-   - **Neural UCB**
+5. **Riquelme, C., et al. (2018)**. "Deep Bayesian Bandits Showdown". *ICLR*.
+   - **Neural contextual bandits comparison**, empirical study
+
+6. **Zhou, D., et al. (2020)**. "Neural Contextual Bandits with UCB-based Exploration". *ICML*.
+   - **Neural UCB**, theoretical guarantees for neural bandits
+
+7. **Lattimore, T., and Szepesvari, C. (2020)**. "Bandit Algorithms". *Cambridge University Press*.
+   - **Comprehensive textbook**, theoretical foundations

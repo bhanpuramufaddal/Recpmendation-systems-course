@@ -27,150 +27,542 @@ By the end of this section, you will:
 
 ---
 
-## The YouTube Recommendation Challenge
+## Why Can't We Just Score All 800M Videos?
 
-### Scale (2016 Paper, ~10x larger today)
+*Before we dive into YouTube's architecture, let's understand why we need it in the first place.*
 
-**Users**: 1B+ monthly active (now 2B+)
-**Videos**: 500M+ (now 800M+)
-**Uploads**: 300+ hours per minute (now 500+)
-**Watch time**: 1B+ hours per day
+### The Naive Approach: Score Everything
 
-**Constraints**:
-- Fresh recommendations (new videos appear constantly)
-- Low latency (<100ms for page load)
-- Personalized for each user
-- Handle extreme sparsity (billions of user-video pairs)
+Imagine you're a YouTube engineer in 2016. Your CEO asks: "Why don't we just run our best model on all videos for each user?"
+
+**Let's do the math together.**
+
+**Given**:
+- Total videos: 800,000,000
+- Ranking model inference time: 0.01ms per video (very optimized!)
+- User patience threshold: 100ms for page load
+
+**Calculation**:
+$$\text{Total time} = 800,000,000 \times 0.01\text{ms} = 8,000,000\text{ms} = 8,000\text{s} \approx 2.2 \text{ hours}$$
+
+*Can you see the problem?* A user would wait **2.2 hours** to load their homepage!
+
+Even if we parallelized across 1,000 GPUs:
+$$\frac{8,000\text{s}}{1,000} = 8\text{s}$$
+
+Still 80x too slow. And that's PER USER, with YouTube serving 2 billion users daily.
+
+**The cost?** At $3/GPU-hour on cloud:
+$$2\text{B users} \times 8\text{s} \times \frac{1,000 \text{ GPUs}}{3600} \times \$3 \approx \$13.3\text{M per day}$$
+
+That's **$4.9 billion per year** just for inference!
+
+*This is why the naive approach fails catastrophically.*
 
 ---
 
-### Two-Stage Architecture
+## The Two-Stage Solution
 
-**Why two stages?**
-- Can't score all 800M videos with complex model (too slow)
-- Solution: **Retrieve** candidates fast (stage 1), **Rank** precisely (stage 2)
+### The Key Insight
+
+*Here's the brilliant insight that makes YouTube-scale recommendations possible:*
+
+**Not all videos need careful consideration.**
+
+Think about it: if you're a jazz enthusiast, do we need to carefully score videos about motorcycle repair? About Korean cooking tutorials? About competitive Fortnite gameplay?
+
+**No!** We can quickly filter to videos that *might* be relevant (candidates), then carefully rank only those.
+
+### Two-Stage Architecture
 
 ```
 800M Videos
-     ↓
-Stage 1: Candidate Generation (fast, broad)
-  → Retrieve ~1000 candidates
-     ↓
-1000 Videos
-     ↓
-Stage 2: Ranking (slow, precise)
-  → Rank top-N for user
-     ↓
-~20 Videos (homepage)
+     |
+     v
++----------------------------------+
+| Stage 1: Candidate Generation    |
+| - Fast, approximate              |
+| - Embedding similarity           |
+| - Time: <10ms                    |
++----------------------------------+
+     |
+     v  (~1000 videos)
++----------------------------------+
+| Stage 2: Ranking                 |
+| - Slow, precise                  |
+| - Rich features + cross-features |
+| - Time: <50ms                    |
++----------------------------------+
+     |
+     v  (~20 videos)
+Homepage Recommendations
 ```
 
-**Latency**:
-- Stage 1: <10ms
-- Stage 2: <50ms
-- Total: <100ms ✓
+**Let's verify the latency:**
+
+**Stage 1** (Candidate Generation):
+- Compute user embedding: ~2ms
+- ANN query for 1000 neighbors: ~8ms
+- Total: **~10ms**
+
+**Stage 2** (Ranking):
+- Feature extraction for 1000 videos: ~10ms (batched)
+- Model inference (1000 videos): ~30ms (batched)
+- Sorting and business logic: ~10ms
+- Total: **~50ms**
+
+**End-to-end: 60ms < 100ms threshold**
+
+*Notice how stage 1 reduced our problem from 800M to 1000 - that's an 800,000x reduction! This is the magic of the two-stage approach.*
 
 ---
 
 ## Stage 1: Candidate Generation
 
-### Architecture (Two-Tower Model)
+### The Two-Tower Architecture
 
-**Goal**: Retrieve ~1000 relevant videos from 800M.
+**Goal**: Retrieve ~1000 relevant videos from 800M in <10ms.
 
-**Approach**: Encode user and videos into same embedding space.
+*How can we possibly do this?*
+
+**Key insight**: If we can embed users and videos into the same vector space, retrieval becomes a nearest-neighbor search.
 
 ```
-User Features          Video Features
-(watch history, search)   (title, tags, stats)
-       ↓                        ↓
-   User Tower              Video Tower
-   (Deep NN)               (Deep NN)
-       ↓                        ↓
-User Embedding          Video Embedding
-   (256-dim)                (256-dim)
-       ↓                        ↓
-     Dot Product → Similarity Score
+User Features              Video Features
+(watch history,            (title, tags,
+ search history,            upload time,
+ demographics)              engagement stats)
+       |                         |
+       v                         v
++-------------+           +-------------+
+| User Tower  |           | Video Tower |
+| (Deep NN)   |           | (Deep NN)   |
++-------------+           +-------------+
+       |                         |
+       v                         v
+User Embedding            Video Embedding
+    u (256-dim)              v (256-dim)
+       |                         |
+       +----------+  +-----------+
+                  v  v
+            Dot Product
+           score = u^T * v
 ```
+
+*Can you see why this is called "two-tower"?* Each side processes its inputs independently, like two separate towers, only meeting at the top for the similarity computation.
 
 ---
 
-### User Tower Features
+### User Tower: From Watch History to Embedding
 
-**1. Watch History**:
-- **Embedded watch history**: IDs of recently watched videos
-- Embed each video ID, average embeddings
-- Captures user's interests
+**The Central Question**: How do we represent a user's preferences as a single 256-dimensional vector?
 
-**2. Search History**:
-- **Embedded search tokens**: Words from recent searches
-- Embed tokens, average
-- Captures explicit intent
+#### Step 1: Embed Individual Videos
 
-**3. Demographics**:
-- Age, gender, geographic location
-- Embed categorical features
+Each video ID gets a learned embedding:
+$$\mathbf{e}_i = \text{Embedding}(\text{video}_i) \in \mathbb{R}^{256}$$
 
-**4. Context**:
-- Device (mobile, desktop, TV)
-- Time of day
-- Day of week
+*Why learn embeddings instead of using hand-crafted features?*
+
+Because with 800M videos, we can't possibly engineer features for each one. The model discovers what matters.
+
+#### Step 2: Aggregate Watch History
+
+**Problem**: User watched 50 videos. How to combine into one vector?
+
+**Simple approach**: Average pooling
+
+$$\mathbf{h}_{\text{watch}} = \frac{1}{|\mathcal{W}|} \sum_{i \in \mathcal{W}} \mathbf{e}_i$$
+
+where $\mathcal{W}$ = set of watched video IDs.
+
+*What does this averaging capture?*
+
+If a user watched 10 jazz videos and 2 cooking videos, the average will be "closer" to jazz in embedding space. The averaging naturally weights toward the user's dominant interests.
+
+**Numerical Example**:
+
+Let's trace through with concrete numbers. Suppose embeddings are 4-dimensional (simplified):
+
+```
+User watched 3 videos:
+- Jazz tutorial:     e_1 = [0.8, 0.2, -0.1, 0.5]
+- Jazz performance:  e_2 = [0.7, 0.3, -0.2, 0.4]
+- Cooking show:      e_3 = [-0.3, 0.6, 0.8, 0.1]
+
+Watch history embedding:
+h_watch = (1/3) * ([0.8, 0.2, -0.1, 0.5] +
+                   [0.7, 0.3, -0.2, 0.4] +
+                   [-0.3, 0.6, 0.8, 0.1])
+
+h_watch = (1/3) * [1.2, 1.1, 0.5, 1.0]
+        = [0.4, 0.37, 0.17, 0.33]
+```
+
+*Notice that the result is closer to jazz (first two dimensions positive) than cooking (third dimension). The user's primary interest is preserved!*
+
+#### Step 3: Combine All User Features
+
+```python
+# Concatenate all user signals
+user_features = concat([
+    h_watch,           # 256-dim: watch history embedding
+    h_search,          # 256-dim: search history embedding
+    demographics,      # 10-dim: age, gender, location encoded
+    context            # 8-dim: device, time of day, day of week
+])
+# Total: 530 dimensions
+
+# Feed through user tower (MLP)
+user_embedding = user_tower(user_features)  # Output: 256-dim
+```
+
+#### The User Tower MLP
+
+$$\mathbf{u} = \text{ReLU}(W_3 \cdot \text{ReLU}(W_2 \cdot \text{ReLU}(W_1 \cdot \mathbf{x} + b_1) + b_2) + b_3)$$
+
+*Why multiple layers?*
+
+**Layer 1**: Learn basic combinations (e.g., "watched jazz AND is 25-35 years old")
+
+**Layer 2**: Learn higher-order patterns (e.g., "jazz enthusiast who searches late at night")
+
+**Layer 3**: Compress into final user representation
 
 ---
 
 ### Video Tower Features
 
-**1. Video ID**:
-- Learned embedding for each video
-- Most important feature
+The video tower processes:
 
-**2. Metadata**:
-- Title (embedded with Word2Vec or BERT)
-- Tags, category
-- Upload timestamp
+**1. Video ID Embedding** (256-dim):
+- Most important feature
+- Captures video's "identity" in recommendation space
+
+**2. Metadata** (embedded):
+- Title: Word2Vec average of title tokens
+- Tags: Average of tag embeddings
+- Category: One-hot encoded then embedded
 
 **3. Engagement Signals**:
-- Total views, likes, shares
+- Total views (log-transformed)
 - Average watch time
-- Click-through rate
+- Like ratio
+- Share count (log-transformed)
 
 ---
 
-### Training Objective
+### Training Objective: Sampled Softmax
 
-**Problem**: Classify which video user will watch next.
+**Formulation**: Multi-class classification where each video is a class.
 
-**Formulation**: Multi-class classification (each video = a class).
+**Full Softmax**:
+$$P(\text{video } i | \text{user } u) = \frac{\exp(\mathbf{u}^T \mathbf{v}_i)}{\sum_{j=1}^{800M} \exp(\mathbf{u}^T \mathbf{v}_j)}$$
 
-**Softmax**:
-$$P(\text{video } i | \text{user } u) = \frac{\exp(\mathbf{u}^T \mathbf{v}_i)}{\sum_{j \in \mathcal{V}} \exp(\mathbf{u}^T \mathbf{v}_j)}$$
+*What's wrong with this?*
 
-**Challenge**: Denominator sums over all 800M videos → expensive!
+That denominator sums over ALL 800M videos! Computing this once would take hours.
 
-**Solution**: **Sampled SoftMax** (negative sampling).
+**Solution**: Sampled Softmax
 
-$$P(i | u) \approx \frac{\exp(\mathbf{u}^T \mathbf{v}_i)}{\sum_{j \in \text{sample}} \exp(\mathbf{u}^T \mathbf{v}_j)}$$
+$$P(i | u) \approx \frac{\exp(\mathbf{u}^T \mathbf{v}_i)}{\exp(\mathbf{u}^T \mathbf{v}_i) + \sum_{j \in \text{negatives}} \exp(\mathbf{u}^T \mathbf{v}_j)}$$
 
-Sample ~1000 negatives instead of using all videos.
+Sample ~1000 "negative" videos (videos user didn't watch) instead of using all.
+
+**Negative Sampling Strategy**:
+
+*What happens if we sample uniformly?*
+
+Uniform sampling over-represents obscure videos (there are millions of them!). The model wastes capacity learning "this jazz fan won't watch this random video with 12 views."
+
+**YouTube's approach**: Sample proportional to popularity^0.75
+
+$$P(\text{sample video } i) \propto (\text{popularity}_i)^{0.75}$$
+
+*Why 0.75?*
+- Exponent of 1.0 would sample purely by popularity (ignores niche content)
+- Exponent of 0 would sample uniformly (wastes capacity on obscure negatives)
+- 0.75 balances: popular enough to be meaningful, but includes some niche
 
 ---
 
-### Example Time as Feature
+### The "Example Age" Feature: A Brilliant Trick
 
-**Key insight**: Videos are time-sensitive (trending, news).
+*Here's one of the cleverest engineering tricks in the paper.*
 
-**Problem**: Model trained on old data recommends old videos.
+**Problem**: Your model is trained on last month's data. But users want FRESH content - trending videos, breaking news, new releases.
 
-**Solution**: **Example age as feature**.
+**Observation**: During training, older videos are over-represented in the positive examples (they've had more time to accumulate watches).
 
-**Feature**: "Time since video upload" at training time.
+**Naive fix**: Add a "freshness" feature. But how?
 
-**At inference**: Set to 0 (pretend video just uploaded) → boosts new videos.
+**The Trick**: Include "example age" as a feature during training.
 
-**Effect**: System recommends fresh content.
+$$\text{example\_age} = t_{\text{train}} - t_{\text{upload}}$$
+
+where $t_{\text{train}}$ is when the training example was created.
+
+**At inference time**: Set example_age = 0 for ALL videos.
+
+*Why does this work?*
+
+Let me walk through the intuition:
+
+**During training**, the model sees:
+- Old viral videos with high engagement AND high example_age
+- New videos with moderate engagement AND low example_age
+
+The model learns: "If example_age is low, this video is fresh and I should give it a chance even without huge engagement numbers."
+
+**At inference**, when we set example_age = 0, we're telling the model: "Treat every video as if it were just uploaded. Judge it on its content, not its accumulated stats."
+
+**Numerical demonstration**:
+
+```
+Without example_age feature:
+- Old viral video: predicted score = 0.95
+- New good video:  predicted score = 0.60  (less watch data)
+
+With example_age = 0 at inference:
+- Old viral video: predicted score = 0.75  (penalized for "being old")
+- New good video:  predicted score = 0.70  (boosted for "being fresh")
+```
+
+The new video now has a fighting chance!
 
 ---
 
-### Implementation (Simplified)
+### Serving: Making It Fast with ANN
+
+**Offline Pipeline** (runs daily):
+
+1. **Compute all video embeddings**:
+   ```
+   For each video v in 800M:
+       v_embedding = video_tower(video_features[v])
+       store(v_embedding)
+   ```
+   Time: ~2 hours on 100 GPUs
+
+2. **Build ANN index**:
+   - Use FAISS or ScaNN
+   - Hierarchical Navigable Small World (HNSW) graphs
+   - Enables sub-linear retrieval
+
+**Online Pipeline** (per user request):
+
+```python
+def get_candidates(user_features, k=1000):
+    # Step 1: Compute user embedding (~2ms)
+    user_embedding = user_tower(user_features)
+
+    # Step 2: Query ANN index (~8ms)
+    candidate_ids, scores = ann_index.search(user_embedding, k)
+
+    return candidate_ids  # Top-1000 videos
+```
+
+**Total latency: <10ms**
+
+---
+
+## Stage 2: Ranking
+
+### Why a Separate Ranking Stage?
+
+*The candidate generation gave us 1000 videos. Why not just use those scores?*
+
+**Two-tower limitations**:
+1. **Only dot product similarity** - can't capture complex interactions
+2. **No cross-features** - can't ask "how did THIS user interact with THIS creator before?"
+3. **Embedding must be precomputed** - can't use real-time signals
+
+**Ranking model advantages**:
+1. Can use ANY features (including expensive ones)
+2. Can compute cross-features at request time
+3. More expressive model architecture
+
+---
+
+### Ranking Architecture
+
+```
+User Features    Video Features    Cross Features
+     |                |                 |
+     v                v                 v
++--------------------------------------------------+
+|              Feature Processing                   |
+|  (embeddings, normalization, crosses)            |
++--------------------------------------------------+
+                      |
+                      v
++--------------------------------------------------+
+|              Deep Neural Network                  |
+|  Layer 1: 1024 units, ReLU, Dropout(0.3)        |
+|  Layer 2: 512 units, ReLU, Dropout(0.3)         |
+|  Layer 3: 256 units, ReLU                        |
++--------------------------------------------------+
+                      |
+                      v
+             Predicted Watch Time
+```
+
+---
+
+### Feature Engineering for Ranking
+
+**1. User Features**:
+- Demographics (age, gender, location)
+- Detailed watch history (not just IDs - completion rates, rewatch counts)
+- Search history with timestamps
+
+**2. Video Features**:
+- Metadata (title, duration, category)
+- Engagement stats (views, likes, comments)
+- **Freshness** (time since upload)
+- Creator features (subscriber count, upload frequency, historical CTR)
+
+**3. Cross Features** (the secret sauce):
+
+$$\text{user\_creator\_affinity} = \frac{\text{videos watched from this creator}}{\text{total videos from this creator shown to user}}$$
+
+$$\text{category\_preference} = \frac{\text{user's watch time in this category}}{\text{user's total watch time}}$$
+
+*Can you see why cross features are so powerful?*
+
+They let the model answer: "How does THIS specific user feel about THIS specific type of content?" - something impossible with just user or video features alone.
+
+---
+
+### Ranking Objective: Expected Watch Time
+
+**Why not optimize for clicks?**
+
+*Consider two videos:*
+
+| Video | Thumbnail | Title | CTR | Avg Watch Time |
+|-------|-----------|-------|-----|----------------|
+| A | Sensational | "You WON'T BELIEVE..." | 15% | 30 seconds |
+| B | Informative | "How Neural Networks Work" | 5% | 10 minutes |
+
+If we optimize for CTR, Video A wins. But users feel **tricked** - they clicked expecting value and bounced quickly.
+
+**Expected engagement calculation**:
+
+$$E[\text{watch time} | \text{impression}] = P(\text{click}) \times E[\text{watch time} | \text{click}]$$
+
+Video A: $0.15 \times 30 = 4.5$ seconds expected
+Video B: $0.05 \times 600 = 30$ seconds expected
+
+*Video B provides 6.7x more expected engagement!*
+
+**Objective**: Predict watch time directly
+
+$$\mathcal{L} = \frac{1}{N} \sum_{(u,v,t)} (\hat{t}_{uv} - t_{uv})^2$$
+
+where $\hat{t}_{uv}$ is predicted watch time and $t_{uv}$ is actual watch time.
+
+---
+
+### Weighted Logistic Regression Trick
+
+**Problem**: Most impressions result in NO click (negative examples vastly outnumber positives).
+
+**YouTube's approach**: Use weighted logistic regression where:
+- Positive examples (watched): weight = watch_time
+- Negative examples (not clicked): weight = 1
+
+**Effect**: A video watched for 10 minutes counts 10x more than one watched for 1 minute in the loss function.
+
+**Mathematical formulation**:
+
+$$\mathcal{L} = -\sum_{(u,v) \in \text{positives}} t_{uv} \log(\sigma(\hat{y}_{uv})) - \sum_{(u,v) \in \text{negatives}} \log(1 - \sigma(\hat{y}_{uv}))$$
+
+*At inference*, we use the log-odds as our ranking score:
+$$\text{score} = \log\left(\frac{P(\text{watch})}{1 - P(\text{watch})}\right) \approx E[\text{watch time}]$$
+
+---
+
+### Numerical Walkthrough: Ranking 5 Videos
+
+Let's trace through the ranking model with actual numbers.
+
+**Setup**: User wants to watch jazz content on mobile, evening time.
+
+**User features** (simplified to 10 dimensions):
+```
+user_vec = [
+    0.8,   # jazz_affinity (high)
+    0.1,   # cooking_affinity (low)
+    0.3,   # age_normalized (25-35)
+    0.7,   # evening_activity (usually active)
+    1.0,   # mobile_device (yes)
+    0.6,   # avg_watch_completion
+    0.4,   # days_since_last_visit (recent)
+    0.9,   # subscription_count_norm
+    0.2,   # search_recent (hasn't searched recently)
+    0.5    # session_depth (mid-session)
+]
+```
+
+**5 Candidate Videos**:
+
+| Video | Category | Duration | Creator Affinity | Freshness |
+|-------|----------|----------|------------------|-----------|
+| V1 | Jazz tutorial | 15 min | 0.8 (watched before) | 2 days |
+| V2 | Jazz concert | 45 min | 0.0 (new creator) | 30 days |
+| V3 | Cooking show | 20 min | 0.9 (favorite creator) | 1 day |
+| V4 | Jazz history | 25 min | 0.3 (watched once) | 7 days |
+| V5 | Jazz + Cooking fusion | 12 min | 0.0 (new) | 3 hours |
+
+**Video features** (10-dim each):
+```
+v1_vec = [0.9, 0.0, 0.3, 0.8, 0.9, 0.7, 0.8, 0.5, 0.6, 0.4]  # Jazz tutorial
+v2_vec = [0.95, 0.0, 0.9, 0.0, 0.3, 0.6, 0.4, 0.7, 0.8, 0.2]  # Jazz concert
+v3_vec = [0.0, 0.95, 0.4, 0.9, 0.95, 0.8, 0.9, 0.6, 0.7, 0.5]  # Cooking
+v4_vec = [0.85, 0.0, 0.5, 0.3, 0.5, 0.7, 0.5, 0.6, 0.4, 0.3]  # Jazz history
+v5_vec = [0.5, 0.5, 0.25, 0.0, 0.99, 0.4, 0.3, 0.3, 0.5, 0.6]  # Fusion (new!)
+```
+
+**Cross features** (per user-video pair):
+```
+cross_v1 = [0.8, 0.7, 0.6, 0.9, 0.5]  # High creator affinity, recent category engagement
+cross_v2 = [0.0, 0.0, 0.6, 0.3, 0.5]  # New creator, but strong category
+cross_v3 = [0.9, 0.8, 0.1, 0.2, 0.5]  # Favorite creator, but wrong category
+cross_v4 = [0.3, 0.2, 0.6, 0.6, 0.5]  # Some history
+cross_v5 = [0.0, 0.0, 0.4, 0.8, 0.9]  # New but fresh and bridging categories
+```
+
+**Model computation** (simplified):
+
+```
+Full feature vector for V1 = concat(user_vec, v1_vec, cross_v1) = 25-dim
+
+Layer 1 (25 -> 16): h1 = ReLU(W1 @ features + b1)
+Layer 2 (16 -> 8):  h2 = ReLU(W2 @ h1 + b2)
+Layer 3 (8 -> 1):   score = W3 @ h2 + b3
+```
+
+**Predicted watch times** (in minutes):
+
+| Video | Raw Score | Predicted Watch Time | Reasoning |
+|-------|-----------|---------------------|-----------|
+| V1 | 2.4 | 11.0 min | Strong match: jazz + known creator + fresh |
+| V2 | 1.8 | 6.0 min | Good category but: unknown creator, old, very long |
+| V3 | 1.2 | 3.3 min | Wrong category despite favorite creator |
+| V4 | 1.9 | 6.7 min | Good match but: older, less creator history |
+| V5 | 2.1 | 8.2 min | Fresh content, bridges interests, short duration |
+
+**Final ranking**: V1 > V5 > V4 > V2 > V3
+
+*Notice how the model balances multiple factors:*
+- V1 wins because of creator affinity + category match + freshness
+- V3 ranks last despite having the user's favorite creator - category mismatch dominates
+- V5 does well because of extreme freshness (example_age trick!) and category bridging
+
+---
+
+### Implementation
 
 ```python
 import torch
@@ -213,134 +605,33 @@ class YouTubeCandidateModel(nn.Module):
         user_demographics: (batch, 10) - age, gender, location, etc.
         video_features: (batch, 20) - video metadata + engagement
         """
-        # Encode watch history (average)
+        # Encode watch history (average pooling)
         watch_embs = self.video_embedding(watch_history)  # (batch, history_len, emb_dim)
         watch_avg = watch_embs.mean(dim=1)  # (batch, emb_dim)
 
-        # Encode search history (average)
+        # Encode search history (average pooling)
         search_embs = self.search_embedding(search_tokens)  # (batch, search_len, emb_dim)
         search_avg = search_embs.mean(dim=1)  # (batch, emb_dim)
 
         # Combine user features
         user_features = torch.cat([watch_avg, search_avg, user_demographics], dim=-1)
 
-        # User embedding
+        # User embedding through tower
         user_emb = self.user_tower(user_features)  # (batch, emb_dim)
 
-        # Video embedding
+        # Video embedding through tower
         video_emb = self.video_tower(video_features)  # (batch, emb_dim)
 
-        # L2 normalize
+        # L2 normalize for cosine similarity
         user_emb = nn.functional.normalize(user_emb, p=2, dim=1)
         video_emb = nn.functional.normalize(video_emb, p=2, dim=1)
 
-        # Dot product
+        # Dot product similarity
         scores = (user_emb * video_emb).sum(dim=1)  # (batch,)
 
         return scores, user_emb, video_emb
-```
 
----
 
-### Serving Candidate Generation
-
-**Offline**:
-1. Compute video embeddings for all 800M videos (daily batch)
-2. Build ANN index (FAISS or custom)
-
-**Online** (per request):
-1. Compute user embedding from features
-2. Query ANN index: top-1000 nearest videos
-3. Return candidates to ranking stage
-
-**Latency**: <10ms
-
----
-
-## Stage 2: Ranking
-
-### Architecture
-
-**Goal**: Rank 1000 candidates to select top-20.
-
-**Approach**: Richer model with more features + cross-features.
-
-**Model**: Deep neural network with feature crosses.
-
-```
-User Features + Video Features + Context
-              ↓
-       Feature Crosses
-  (user_age × video_category, etc.)
-              ↓
-       Deep Neural Network
-         (3-4 layers)
-              ↓
-      Predicted Watch Time
-```
-
----
-
-### Ranking Features
-
-**1. User Features**:
-- Demographics (age, gender, location)
-- Watch history (detailed: watch time per video, completion rate)
-- Search history
-
-**2. Video Features**:
-- Metadata (title, tags, category, duration)
-- Engagement (views, likes, shares, CTR)
-- Freshness (time since upload)
-- Channel (creator's past performance)
-
-**3. User-Video Cross Features**:
-- User's past engagement with this channel
-- User's past engagement with this video category
-- User's language vs. video language
-
-**4. Contextual Features**:
-- Time of day, day of week
-- Device type
-- User's location vs. video's popularity in that location
-
----
-
-### Ranking Objective
-
-**Goal**: Predict **expected watch time**.
-
-$$\text{score}(u, v) = \mathbb{E}[\text{watch time} | u, v]$$
-
-**Why watch time (not just click)?**
-- Clickbait videos have high CTR but low watch time
-- Watch time better aligns with user satisfaction
-
-**Training**: Regression on actual watch time.
-
-$$\mathcal{L} = \sum_{(u, v, t)} (\text{predicted}_t - \text{actual}_t)^2$$
-
-where $t$ = watch time.
-
----
-
-### Weighted Logistic Regression Trick
-
-**Problem**: Most videos are not watched (label = 0) → class imbalance.
-
-**YouTube's approach**: Treat as **weighted logistic regression**.
-
-**Labels**:
-- Positive: Watched (weight = watch time)
-- Negative: Not watched (weight = 1)
-
-**Benefit**: Positive samples weighted by engagement → longer watches matter more.
-
----
-
-### Implementation (Simplified)
-
-```python
 class YouTubeRankingModel(nn.Module):
     def __init__(self, n_features):
         super().__init__()
@@ -363,83 +654,191 @@ class YouTubeRankingModel(nn.Module):
         """
         watch_time_pred = self.layers(features)  # (batch, 1)
         return watch_time_pred.squeeze()
-
-
-# Training
-model_rank = YouTubeRankingModel(n_features=500)
-optimizer = torch.optim.Adam(model_rank.parameters(), lr=0.001)
-criterion = nn.MSELoss()
-
-for batch in ranking_data_loader:
-    features, watch_times = batch  # watch_times = actual watch time (seconds)
-
-    # Predict
-    pred_watch_time = model_rank(features)
-
-    # Loss
-    loss = criterion(pred_watch_time, watch_times)
-
-    # Backward
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
 ```
 
 ---
 
-### Serving Ranking
+## What Can Go Wrong: Failure Modes and Solutions
 
-**Input**: 1000 candidates from stage 1
+*Now let's discuss the things that can silently break your recommendation system. These are the issues that won't show up in offline metrics but will hurt real users.*
 
-**Process**:
-1. Extract features for each (user, video) pair
-2. Run through ranking model
-3. Sort by predicted watch time
-4. Return top-20
+### Failure Mode 1: Retrieval-Ranking Mismatch
 
-**Latency**: <50ms (1000 forward passes)
+**Symptom**: Offline ranking metrics look great, but A/B tests show no improvement or regression.
+
+**What's happening**: The ranking model is trained on videos that appear in production, but the candidate generator retrieves a DIFFERENT set of videos.
+
+**Example**:
+```
+Training data: User saw {V1, V2, V3, V4, V5} and clicked V2
+  - Ranking model learns: Given these 5, predict V2
+
+Production: Candidate gen retrieves {V6, V7, V8, V9, V10}
+  - None of these were in training!
+  - Ranking model has never seen these comparisons
+```
+
+**Root cause**: The candidate generation and ranking stages were trained independently on different data distributions.
+
+**Solutions**:
+1. **Train ranking on retrieved candidates**: Use actual retrieval output as training negatives
+2. **Joint training**: End-to-end training of both stages
+3. **Calibration**: Regularly audit overlap between training candidates and production candidates
+4. **Monitoring**: Track "% of ranked videos that appeared in training"
 
 ---
 
-## Key Engineering Decisions
+### Failure Mode 2: Training-Serving Skew
 
-### 1. Negative Sampling
+**Symptom**: Model performance degrades over time even with retraining. Works on historical data, fails on fresh data.
 
-**Problem**: Training requires negative samples (videos user didn't watch).
+**What's happening**: Features computed at training time differ from serving time.
 
-**Naive**: Sample uniformly → biases toward obscure videos.
+**Common causes**:
 
-**YouTube's approach**: Sample proportional to video popularity.
+**a) Feature computation differences**:
+```
+Training: video_popularity = count(watches_last_30_days)
+Serving: video_popularity = count(watches_last_30_days)  # BUT computed at different time!
+```
+A video that had 1M views at training time might have 10M now.
 
-$$P(\text{sample video } i) \propto (\text{popularity of } i)^{0.25}$$
+**b) Look-ahead bias**:
+```
+Training: Used future information accidentally
+  - "User subscription status" computed AFTER the interaction
+  - Model learns to use information it won't have at serving time
+```
 
-**Effect**: Balances popular and niche videos in training.
+**c) Stale features**:
+```
+Offline embeddings updated daily
+User's taste changed THIS session
+Model uses yesterday's representation
+```
+
+**Solutions**:
+1. **Feature logging**: Log EXACT features used at serving time for training
+2. **Time-travel testing**: Evaluate with features as they were at prediction time
+3. **Feature freshness monitoring**: Alert when offline/online feature divergence exceeds threshold
+4. **Timestamp discipline**: Never use features computed after the prediction timestamp
 
 ---
 
-### 2. Handling Fresh Content
+### Failure Mode 3: Feedback Loops and Popularity Bias
 
-**Challenge**: New videos have no watch history.
+**Symptom**: Recommendations become increasingly homogeneous. New content never gets traction. A few videos dominate everything.
+
+**What's happening**: Rich-get-richer dynamics
+
+```
+Day 1: Video A has 100 views, Video B has 10 views
+  - Model recommends A more (more engagement data)
+
+Day 2: Video A now has 1000 views, Video B still has 10
+  - Gap widens
+
+Day 30: Video A has 10M views, Video B was never shown
+  - Model is CERTAIN A is better (but never tested B!)
+```
+
+**The feedback loop**:
+```
+Model recommends popular videos
+     ↓
+Popular videos get more watches
+     ↓
+Training data reinforces popularity
+     ↓
+Model recommends popular videos even more
+     ↓
+(repeat)
+```
+
+**Solutions**:
+1. **Exploration**: Reserve 5-10% of recommendations for random/diverse content
+2. **Popularity debiasing**: Train with inverse propensity weighting
+   $$\text{weight}(v) = \frac{1}{\sqrt{\text{impressions}(v)}}$$
+3. **Counterfactual evaluation**: Use logged propensities to estimate policy value
+4. **Multi-armed bandits**: Balance exploitation (show best) vs exploration (try new)
+
+---
+
+### Failure Mode 4: Embedding Staleness
+
+**Symptom**: New videos get very few recommendations. Trending content doesn't surface quickly.
+
+**What's happening**: Video embeddings are computed in daily batch job, but video properties change hourly.
+
+**Example**:
+```
+12:00 AM: New video uploaded, embedded with 0 views
+11:00 PM: Video has gone viral (1M views)
+           But embedding still reflects 0-view video
+           Candidate generation doesn't retrieve it
+```
+
+**The math**:
+```
+Batch embedding update: Once per day (24h latency)
+Viral video lifecycle: Peaks within 4-6 hours
+Result: Miss the entire viral window!
+```
+
+**Solutions**:
+1. **Example age feature**: At inference, set age=0 to boost fresh content
+2. **Real-time embedding updates**: Stream processing for viral content
+3. **Hybrid retrieval**:
+   - 80% from ANN (stable embeddings)
+   - 20% from recent uploads (freshness)
+4. **Tiered refresh**: Update popular videos every hour, long-tail daily
+
+---
+
+### Failure Mode 5: Cold Start Cascades
+
+**Symptom**: New users bounce immediately. New creators never get their first viewer.
+
+**What's happening**: Two-stage system requires data at BOTH stages to work well.
+
+**For new users**:
+```
+Stage 1: User embedding = average of 0 watched videos = ???
+         Cannot compute meaningful similarity
+         Retrieves random candidates
+
+Stage 2: No watch history features
+         No creator affinity features
+         Random ranking
+
+Result: Terrible recommendations → User leaves → Never get data → (stuck)
+```
+
+**For new creators**:
+```
+Stage 1: Video embedding exists, but no engagement signal
+         Similarity to user embeddings is random
+
+Stage 2: creator_historical_ctr = undefined
+         creator_avg_watch_time = undefined
+         Model uncertain, ranks low
+
+Result: Never shown → Never watched → Never improve rankings → (stuck)
+```
 
 **Solutions**:
 
-**a) Example Age Feature**:
-- At training: Use actual video age
-- At inference: Set to 0 → boosts new videos
+**For new users**:
+1. **Onboarding flow**: Ask for 3-5 topic preferences
+2. **Demographic priors**: Initialize embedding based on age/location
+3. **Popular content**: Show globally popular until personalization kicks in
+4. **Exploration boost**: More random recommendations for new users
 
-**b) Exploration**:
-- 10% of recommendations = fresh videos (random)
-- Collect data → improve recommendations
-
----
-
-### 3. Diversity
-
-**Problem**: Model may recommend very similar videos (filter bubble).
-
-**YouTube's approach**:
-- Deduplicate: Don't show multiple videos from same creator in top-20
-- Diversify topics: Mix different categories
+**For new creators**:
+1. **Content-based features**: Use video title/thumbnail/description when engagement missing
+2. **Creator bootstrap**: Inherit stats from similar existing creators
+3. **Explore slots**: Reserve homepage positions for new creator content
+4. **Quality signals**: Prioritize production quality metrics initially
 
 ---
 
@@ -480,16 +879,16 @@ $$P(\text{sample video } i) \propto (\text{popularity of } i)^{0.25}$$
 
 ## Evolution Over Time
 
-### 2016 → 2024 Changes (Estimated)
+### 2016 to 2024 Changes (Estimated)
 
 **Scale**:
-- Videos: 500M → 800M
-- Users: 1B → 2B
-- Embeddings: 256D → 512D (larger capacity)
+- Videos: 500M to 800M
+- Users: 1B to 2B
+- Embeddings: 256D to 512D (larger capacity)
 
 **Models**:
-- **Candidate generation**: Two-tower → Multi-tower (separate towers for shorts, live, etc.)
-- **Ranking**: 3-layer DNN → Transformer-based models
+- **Candidate generation**: Two-tower to Multi-tower (separate towers for shorts, live, etc.)
+- **Ranking**: 3-layer DNN to Transformer-based models
 
 **Features**:
 - Added: Short-form content (Shorts), live streams, user comments
@@ -500,53 +899,7 @@ $$P(\text{sample video } i) \propto (\text{popularity of } i)^{0.25}$$
 
 ---
 
-## Challenges & Solutions
-
-### Challenge 1: Cold Start (New Users)
-
-**Problem**: New users have no watch history.
-
-**Solutions**:
-- **Trending videos**: Show globally popular content
-- **Onboarding**: Ask user to select interests
-- **Demographic defaults**: Use age/gender/location to predict initial preferences
-
----
-
-### Challenge 2: Cold Start (New Videos)
-
-**Problem**: New videos have no engagement data.
-
-**Solutions**:
-- **Example age feature** (boost fresh content)
-- **Creator history**: Use creator's past videos' performance
-- **Content features**: Title, thumbnail, tags
-
----
-
-### Challenge 3: Filter Bubble
-
-**Problem**: Users only see similar content.
-
-**Solutions**:
-- **Exploration**: 10-20% of recommendations = diverse content
-- **Topic mixing**: Show videos from multiple categories
-- **"Break out of filter bubble"**: Periodic prompt to try new topics
-
----
-
-### Challenge 4: Extreme Skew (Popularity Bias)
-
-**Problem**: Popular videos dominate recommendations.
-
-**Solutions**:
-- **Calibration**: Adjust scores to promote diverse creators
-- **Creator diversity**: Limit number of videos from same creator
-- **Long-tail promotion**: Dedicated sections for niche content
-
----
-
-## Lessons from YouTube
+## Key Lessons from YouTube
 
 ### 1. Two-Stage is Essential
 
@@ -578,7 +931,7 @@ $$P(\text{sample video } i) \propto (\text{popularity of } i)^{0.25}$$
 
 ### 4. A/B Test Everything
 
-**Even small changes** (e.g., feature engineering) → A/B test.
+**Even small changes** (e.g., feature engineering) require A/B testing.
 
 **Metrics matter**: Don't just look at CTR, measure watch time, sessions, satisfaction.
 
@@ -590,7 +943,7 @@ $$P(\text{sample video } i) \propto (\text{popularity of } i)^{0.25}$$
 
 **Add complexity incrementally** (cross-features, transformers).
 
-**YouTube's 2016 model**: Relatively simple (2-3 layer NNs) → huge impact.
+**YouTube's 2016 model**: Relatively simple (2-3 layer NNs) but massive impact.
 
 ---
 
@@ -607,13 +960,16 @@ $$P(\text{sample video } i) \propto (\text{popularity of } i)^{0.25}$$
 **Architecture**:
 ```
 800M Videos
-    ↓
+    |
+    v
 Stage 1: Candidate Generation (<10ms)
-  Two-tower model + ANN → 1000 candidates
-    ↓
+  Two-tower model + ANN -> 1000 candidates
+    |
+    v
 Stage 2: Ranking (<50ms)
-  Deep NN + cross-features → Top-20
-    ↓
+  Deep NN + cross-features -> Top-20
+    |
+    v
 Homepage Recommendations
 ```
 
@@ -661,13 +1017,13 @@ Total videos: 800M
 Candidate generation: Retrieves 1000 videos
 Ranking model: 10ms per video
 
-Without two-stage: 800M × 10ms = ?
-With two-stage: Candidate (10ms) + Ranking (1000 × 10ms) = ?
+Without two-stage: 800M x 10ms = ?
+With two-stage: Candidate (10ms) + Ranking (1000 x 10ms) = ?
 ```
 
 **Solution**:
 ```
-Without: 800M × 10ms = 8 billion ms = 92.6 days!
+Without: 800M x 10ms = 8 billion ms = 92.6 days!
 With: 10ms + 10s = ~10 seconds
 
 Speedup: 800,000x faster!
@@ -687,8 +1043,8 @@ Which to recommend if optimizing for watch time?
 
 **Solution**:
 ```
-Video A engagement: 0.10 × 30 = 3 seconds (expected)
-Video B engagement: 0.05 × 300 = 15 seconds (expected)
+Video A engagement: 0.10 x 30 = 3 seconds (expected)
+Video B engagement: 0.05 x 300 = 15 seconds (expected)
 
 Recommend Video B (higher expected watch time).
 ```
@@ -704,17 +1060,19 @@ Video B: 100K views
 Video C: 10K views
 ```
 
-**Compute**: Sampling probabilities (proportional to popularity^0.25).
+**Compute**: Sampling probabilities (proportional to popularity^0.75).
 
 **Solution**:
 ```
-A: 1,000,000^0.25 = 31.62
-B: 100,000^0.25 = 17.78
-C: 10,000^0.25 = 10.00
+A: 1,000,000^0.75 = 31,623
+B: 100,000^0.75 = 5,623
+C: 10,000^0.75 = 1,000
 
-Sum = 59.4
+Sum = 38,246
 
-P(A) = 31.62 / 59.4 = 0.53
-P(B) = 17.78 / 59.4 = 0.30
-P(C) = 10.00 / 59.4 = 0.17
+P(A) = 31,623 / 38,246 = 0.827
+P(B) = 5,623 / 38,246 = 0.147
+P(C) = 1,000 / 38,246 = 0.026
 ```
+
+*Notice how the 0.75 exponent compresses the distribution - Video A is 100x more popular than C, but only ~32x more likely to be sampled.*

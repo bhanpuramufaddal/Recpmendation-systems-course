@@ -1,5 +1,46 @@
 # Week 7: Graph Neural Networks - GNN Fundamentals
 
+## The Opening Question: Why Can't Matrix Factorization See the Whole Picture?
+
+*Let's start with a puzzle that should bother you.*
+
+**The Setup:**
+```
+Alice rates: Inception (5), Interstellar (5), The Matrix (4)
+Bob rates:   Inception (5), Interstellar (5), Fight Club (5)
+Carol rates: Fight Club (5), Pulp Fiction (5), Se7en (5)
+```
+
+**Matrix Factorization's view:**
+- Alice and Bob are similar (both love Inception, Interstellar)
+- Bob and Carol are similar (both love Fight Club)
+- Alice and Carol? MF sees **NO direct connection**
+
+**But wait!** Through Bob, Alice is connected to Carol. And Carol loves dark psychological thrillers. Maybe Alice would like Se7en too?
+
+**MF's prediction for Alice → Se7en:** Low confidence (no direct signal)
+
+**The Multi-Hop Connection:**
+```
+Alice ←→ Bob ←→ Carol → Se7en
+        (2 hops away)
+```
+
+*This is the "friend of a friend" pattern. MF completely misses it.*
+
+**Let's put numbers to this failure:**
+
+| Approach | How it sees Alice-Carol | Alice→Se7en prediction |
+|----------|-------------------------|------------------------|
+| **MF** | No connection | 2.1 (low - random guess) |
+| **2-hop GNN** | Connected via Bob | 4.2 (high - propagated signal) |
+
+**The gap is 2.1 vs 4.2!** That's the difference between "not recommended" and "top-10 recommendation."
+
+*Can you see why exploiting graph structure matters?*
+
+---
+
 ## Overview
 
 **Graph Neural Networks (GNNs)** extend deep learning to graph-structured data by performing **neighborhood aggregation**: each node learns from its neighbors.
@@ -11,7 +52,7 @@
 **Notable models**:
 - **GCN** (Kipf & Welling, 2017): Graph Convolutional Networks
 - **GraphSAGE** (Hamilton et al., 2017): Inductive learning
-- **GAT** (Veličković et al., 2018): Attention-based aggregation
+- **GAT** (Velickovic et al., 2018): Attention-based aggregation
 - **PinSage** (Ying et al., 2018): Pinterest's billion-scale GNN
 - **LightGCN** (He et al., 2020): Simplified GNN for RecSys
 
@@ -35,32 +76,61 @@ By the end of this section, you will:
 ### Limitation of Traditional Graph Methods
 
 **DeepWalk, Node2Vec**:
-- Random walks → embeddings
+- Random walks then embeddings
 - **Problem**: Fixed embeddings (can't generalize to new nodes)
 
 **Matrix Factorization**:
 - User/item embeddings
-- **Problem**: Doesn't use graph structure explicitly
+- **Problem**: Only captures direct connections, misses multi-hop relationships
 
-**GNN Solution**: Learn node embeddings by aggregating neighbor information.
+*Notice that* MF learns $\mathbf{p}_u$ and $\mathbf{q}_i$ independently. The embedding of Alice doesn't "know" about Carol's preferences, even though Bob connects them!
+
+**GNN Solution**: Learn node embeddings by aggregating neighbor information **recursively**.
 
 ---
 
-### GNN Paradigm
+### GNN Paradigm: Nodes Talk to Their Neighbors
+
+**The Core Intuition:**
+
+Imagine a room full of people at a party. Each person only knows their immediate friends. Now we play a game:
+
+*Round 1:* Everyone tells their friends what movies they like.
+*Round 2:* Everyone summarizes what they heard and tells their friends again.
+*Round 3:* Same thing.
+
+After 3 rounds, what does Alice know?
+- Round 1: Her own preferences + what Bob told her
+- Round 2: Bob's summary (which includes Carol's info!)
+- Round 3: Information from people 3 connections away
+
+**This is message passing.** Each round is a GNN layer.
+
+---
+
+### The GNN Update Rule
 
 **Goal**: Learn node embedding $\mathbf{h}_v$ for each node $v$.
 
 **Process** (layer-wise):
 $$\mathbf{h}_v^{(k)} = \sigma\left(\mathbf{W}^{(k)} \cdot \text{AGG}^{(k)}\left(\{\mathbf{h}_u^{(k-1)} : u \in N(v)\}\right)\right)$$
 
-where:
-- $\mathbf{h}_v^{(k)}$ = embedding of node $v$ at layer $k$
-- $N(v)$ = neighbors of node $v$
-- $\text{AGG}$ = aggregation function (mean, sum, max, attention)
-- $\mathbf{W}^{(k)}$ = learnable weight matrix
-- $\sigma$ = activation (ReLU, etc.)
+**Let me break down each term:**
 
-**Intuition**: At each layer, node gathers information from its neighbors.
+| Term | What it does | Intuition |
+|------|--------------|-----------|
+| $\mathbf{h}_v^{(k)}$ | Embedding of node $v$ at layer $k$ | "What Alice knows after $k$ rounds" |
+| $N(v)$ | Neighbors of node $v$ | "Alice's direct friends" |
+| $\text{AGG}$ | Aggregation function (mean, sum, max, attention) | "How to combine friends' messages" |
+| $\mathbf{W}^{(k)}$ | Learnable weight matrix | "What information to extract" |
+| $\sigma$ | Activation (ReLU, etc.) | "Nonlinearity for expressiveness" |
+
+**Why each component?**
+- **AGG**: We need to combine multiple neighbors into one vector (order-invariant)
+- **W**: Different information matters at different depths
+- **$\sigma$**: Without it, $k$ layers collapse to 1 linear layer
+
+*Can you see why* the choice of AGG matters? Mean aggregation treats all neighbors equally. Max picks the strongest signal. Attention learns which neighbors matter most.
 
 ---
 
@@ -85,22 +155,24 @@ where:
 
 ### Deriving the Normalization: Why $\tilde{\mathbf{D}}^{-1/2} \tilde{\mathbf{A}} \tilde{\mathbf{D}}^{-1/2}$?
 
-*Let me show you step-by-step why this normalization is necessary.*
+*Let me show you step-by-step why this normalization is necessary. We'll derive it by fixing problems one at a time.*
 
 **Step 1: Naive aggregation (just sum neighbors)**
 
 $$\mathbf{h}_v^{(k+1)} = \sum_{u \in N(v)} \mathbf{h}_u^{(k)}$$
 
-**What goes wrong?**
+*What happens if...* we have nodes with very different degrees?
 
 ```
-Node A: 2 neighbors  → aggregated sum ≈ 2 × (average embedding)
-Node B: 100 neighbors → aggregated sum ≈ 100 × (average embedding)
+Node A: 2 neighbors  → aggregated sum = 2 × (average embedding)
+Node B: 100 neighbors → aggregated sum = 100 × (average embedding)
 ```
 
 Node B's representation is **50x larger** just because it has more neighbors!
 
-After a few layers, high-degree nodes explode in magnitude.
+After a few layers, high-degree nodes explode in magnitude. Training becomes unstable.
+
+**Symptom**: Loss goes to NaN. Embeddings overflow.
 
 ---
 
@@ -110,17 +182,17 @@ $$\mathbf{h}_v^{(k+1)} = \frac{1}{|N(v)|} \sum_{u \in N(v)} \mathbf{h}_u^{(k)}$$
 
 This is **row normalization**: $\tilde{\mathbf{D}}^{-1} \tilde{\mathbf{A}}$
 
-**What goes wrong now?**
+*Better, but what goes wrong now?*
 
 Consider:
-- Node A has 2 neighbors, each with degree 100
-- Node B has 2 neighbors, each with degree 2
+- Node A has 2 neighbors, each with degree 100 (connected to hubs)
+- Node B has 2 neighbors, each with degree 2 (connected to specialists)
 
 Both A and B average over 2 neighbors, but:
-- A's neighbors are "hubs" (connected to many other nodes) — their information is diluted
-- B's neighbors are "specialists" (connected to few nodes) — their information is focused
+- A's neighbors are "hubs" — their information is spread across 100 connections, diluted
+- B's neighbors are "specialists" — their information is focused, meaningful
 
-*We're not accounting for how "important" each neighbor's signal is.*
+*We're treating a message from a hub the same as a message from a specialist. That's wrong!*
 
 ---
 
@@ -130,14 +202,96 @@ $$\mathbf{h}_v^{(k+1)} = \sum_{u \in N(v)} \frac{1}{\sqrt{|N(v)|} \cdot \sqrt{|N
 
 **The factor $\frac{1}{\sqrt{|N(v)|} \cdot \sqrt{|N(u)|}}$ means:**
 
-- Divide by $\sqrt{|N(v)|}$: "I have many neighbors, so each contributes less"
-- Divide by $\sqrt{|N(u)|}$: "This neighbor is very popular, so their signal is diluted"
+- Divide by $\sqrt{|N(v)|}$: "I have many neighbors, so each contributes less to MY representation"
+- Divide by $\sqrt{|N(u)|}$: "This neighbor is very popular, so THEIR signal is diluted"
 
 **In matrix form**: $\tilde{\mathbf{D}}^{-1/2} \tilde{\mathbf{A}} \tilde{\mathbf{D}}^{-1/2}$
 
-**Why square root?** It preserves the **spectral properties** of the graph Laplacian, making training more stable. (Deep math reason: eigenvalues stay in [-1, 1].)
+*Why square root?* It preserves the **spectral properties** of the graph Laplacian, making training more stable. (Deep math reason: eigenvalues stay in [-1, 1].)
 
-**Normalization**: $\tilde{\mathbf{D}}^{-1/2} \tilde{\mathbf{A}} \tilde{\mathbf{D}}^{-1/2}$ normalizes by degree (prevents large-degree nodes from dominating).
+*Notice that* this is the geometric mean of the two normalizations!
+
+---
+
+### Numerical Walkthrough: 4-Node GCN Propagation
+
+*Let's trace through exactly what happens with actual numbers.*
+
+**Our Graph:**
+```
+    [0]----[1]
+     |      |
+     |      |
+    [2]----[3]
+```
+
+**Adjacency Matrix (with self-loops):**
+```
+      0   1   2   3
+  0 [ 1   1   1   0 ]   degree = 3
+  1 [ 1   1   0   1 ]   degree = 3
+  2 [ 1   0   1   1 ]   degree = 3
+  3 [ 0   1   1   1 ]   degree = 3
+```
+
+All nodes have degree 3 (including self-loop).
+
+**Initial Embeddings (d=2):**
+```
+h_0^(0) = [1.0, 0.0]   (Node 0: "action lover")
+h_1^(0) = [0.0, 1.0]   (Node 1: "comedy lover")
+h_2^(0) = [1.0, 1.0]   (Node 2: "likes both")
+h_3^(0) = [0.0, 0.0]   (Node 3: "cold start user")
+```
+
+**Normalization Factor:**
+Since all degrees are 3: $\frac{1}{\sqrt{3} \cdot \sqrt{3}} = \frac{1}{3}$
+
+---
+
+**Layer 1 Propagation (no weight matrix for clarity):**
+
+**Node 0** aggregates from neighbors {0, 1, 2}:
+$$\mathbf{h}_0^{(1)} = \frac{1}{3}[1.0, 0.0] + \frac{1}{3}[0.0, 1.0] + \frac{1}{3}[1.0, 1.0] = [\frac{2}{3}, \frac{2}{3}] = [0.67, 0.67]$$
+
+**Node 1** aggregates from neighbors {0, 1, 3}:
+$$\mathbf{h}_1^{(1)} = \frac{1}{3}[1.0, 0.0] + \frac{1}{3}[0.0, 1.0] + \frac{1}{3}[0.0, 0.0] = [\frac{1}{3}, \frac{1}{3}] = [0.33, 0.33]$$
+
+**Node 2** aggregates from neighbors {0, 2, 3}:
+$$\mathbf{h}_2^{(1)} = \frac{1}{3}[1.0, 0.0] + \frac{1}{3}[1.0, 1.0] + \frac{1}{3}[0.0, 0.0] = [\frac{2}{3}, \frac{1}{3}] = [0.67, 0.33]$$
+
+**Node 3** aggregates from neighbors {1, 2, 3}:
+$$\mathbf{h}_3^{(1)} = \frac{1}{3}[0.0, 1.0] + \frac{1}{3}[1.0, 1.0] + \frac{1}{3}[0.0, 0.0] = [\frac{1}{3}, \frac{2}{3}] = [0.33, 0.67]$$
+
+**After Layer 1:**
+```
+h_0^(1) = [0.67, 0.67]  ← Picked up comedy from Node 1
+h_1^(1) = [0.33, 0.33]  ← More balanced now
+h_2^(1) = [0.67, 0.33]  ← Still action-leaning
+h_3^(1) = [0.33, 0.67]  ← COLD START NODE GOT PREFERENCES!
+```
+
+*Can you see what happened?* Node 3 started with [0, 0] (no preferences), but after one layer, it has [0.33, 0.67] — it learned that its neighbors (1 and 2) lean toward comedy!
+
+---
+
+**Layer 2 Propagation:**
+
+**Node 0** aggregates from new embeddings:
+$$\mathbf{h}_0^{(2)} = \frac{1}{3}[0.67, 0.67] + \frac{1}{3}[0.33, 0.33] + \frac{1}{3}[0.67, 0.33]$$
+$$= [\frac{0.67 + 0.33 + 0.67}{3}, \frac{0.67 + 0.33 + 0.33}{3}] = [0.56, 0.44]$$
+
+*Notice that* Node 0 now has information from Node 3 (via Node 1 and Node 2). The 2-hop connection is captured!
+
+**After Layer 2:**
+```
+h_0^(2) = [0.56, 0.44]
+h_1^(2) = [0.44, 0.56]
+h_2^(2) = [0.56, 0.56]
+h_3^(2) = [0.44, 0.44]
+```
+
+*What happens if...* we keep going? All embeddings will converge to the same value! This is **over-smoothing**, which we'll discuss later.
 
 ---
 
@@ -226,7 +380,7 @@ print(f"Node embeddings shape: {embeddings.shape}")  # (100, 64)
 
 **Key innovation**: **Sampling** neighbors (don't use all neighbors).
 
-**Motivation**: Large graphs → nodes have 1000s of neighbors → expensive to aggregate all.
+**Motivation**: Large graphs have nodes with 1000s of neighbors. Aggregating all is expensive.
 
 **Process**:
 1. **Sample**: Sample $K$ neighbors per node
@@ -237,6 +391,8 @@ print(f"Node embeddings shape: {embeddings.shape}")  # (100, 64)
 - **Mean**: $\text{AGG} = \frac{1}{|N(v)|} \sum_{u \in N(v)} \mathbf{h}_u$
 - **Max**: $\text{AGG} = \max_{u \in N(v)} \mathbf{h}_u$
 - **LSTM**: Apply LSTM to neighbor sequence
+
+*Why sample?* Consider a celebrity with 1M followers. Aggregating all 1M is O(1M). Sampling 10 is O(10). Similar information, 100,000x faster!
 
 ---
 
@@ -308,9 +464,11 @@ def sample_neighbors(adjacency_list, K=10):
 
 ### Architecture
 
-**Paper**: Veličković et al., "Graph Attention Networks" (ICLR 2018)
+**Paper**: Velickovic et al., "Graph Attention Networks" (ICLR 2018)
 
 **Key idea**: **Attention** mechanism to weight neighbors.
+
+*Not all neighbors are equally important!* Your best friend's movie opinion matters more than a random acquaintance's.
 
 **Attention weight**:
 $$\alpha_{uv} = \frac{\exp(e_{uv})}{\sum_{k \in N(v)} \exp(e_{vk})}$$
@@ -330,7 +488,7 @@ $$\mathbf{h}_v' = \sigma\left(\sum_{u \in N(v)} \alpha_{uv} \mathbf{W} \mathbf{h
 
 **Graph**:
 ```
-    Node A ─── Node B
+    Node A --- Node B
        \        /
         \      /
          Node C
@@ -345,7 +503,7 @@ h_B = [0.8, 0.2]
 h_C = [0.1, 0.9]
 ```
 
-**Step 1: Transform embeddings** (W is 2×2 identity for simplicity)
+**Step 1: Transform embeddings** (W is 2x2 identity for simplicity)
 ```
 Wh_A = [0.5, 0.3]
 Wh_B = [0.8, 0.2]
@@ -354,8 +512,8 @@ Wh_C = [0.1, 0.9]
 
 **Step 2: Compute attention scores for B's neighbors**
 
-For edge A→B: Concatenate [Wh_A || Wh_B] = [0.5, 0.3, 0.8, 0.2]
-For edge C→B: Concatenate [Wh_C || Wh_B] = [0.1, 0.9, 0.8, 0.2]
+For edge A to B: Concatenate [Wh_A || Wh_B] = [0.5, 0.3, 0.8, 0.2]
+For edge C to B: Concatenate [Wh_C || Wh_B] = [0.1, 0.9, 0.8, 0.2]
 
 **Attention vector** $\mathbf{a}$ (learned, assume $\mathbf{a} = [0.2, 0.1, 0.3, 0.4]$):
 
@@ -381,50 +539,6 @@ $$= \sigma([0.253 + 0.050, 0.152 + 0.446])$$
 $$= \sigma([0.303, 0.598])$$
 
 *B's new representation is a weighted mix of A and C's features.*
-
----
-
-### The Over-Smoothing Problem
-
-*What happens if we stack too many GNN layers?*
-
-**The issue**: After many layers, ALL nodes have seen information from ALL other nodes.
-
-**Layer-by-layer view**:
-```
-Layer 0: Node knows itself
-Layer 1: Node knows 1-hop neighbors
-Layer 2: Node knows 2-hop neighbors (neighbors of neighbors)
-...
-Layer 5: Node knows 5-hop neighbors (almost everyone!)
-```
-
-**The problem**:
-
-After enough layers, every node's representation becomes:
-$$\mathbf{h}_v \approx \text{average of all nodes in the graph}$$
-
-*All node embeddings converge to the same vector!*
-
-**Visual**:
-```
-Layer 1: Nodes are distinguishable
-         A ●    B ●    C ●    D ●
-
-Layer 3: Still somewhat different
-         A ◐    B ◐    C ◐    D ◐
-
-Layer 6: All the same!
-         A ○    B ○    C ○    D ○
-         (over-smoothed)
-```
-
-**The intuition**: It's like playing "telephone" across the graph. After enough rounds, everyone has heard a garbled mix of everyone's original message.
-
-**Solutions**:
-1. **Use fewer layers** (2-3 is usually optimal)
-2. **Skip connections**: $\mathbf{h}_v^{(k+1)} = \mathbf{h}_v^{(k+1)} + \mathbf{h}_v^{(k)}$ (preserve original)
-3. **JKNet**: Concatenate ALL layer outputs, let the model choose
 
 ---
 
@@ -477,6 +591,101 @@ print(f"GAT embeddings shape: {embeddings_gat.shape}")
 ```
 
 **Advantage**: Learns importance of each neighbor (interpretable).
+
+---
+
+## The Over-Smoothing Problem: When GNNs Go Wrong
+
+*What happens if we stack too many GNN layers?*
+
+### The Problem
+
+**The issue**: After many layers, ALL nodes have seen information from ALL other nodes.
+
+**Layer-by-layer view**:
+```
+Layer 0: Node knows itself
+Layer 1: Node knows 1-hop neighbors
+Layer 2: Node knows 2-hop neighbors (neighbors of neighbors)
+...
+Layer 5: Node knows 5-hop neighbors (almost everyone in a small graph!)
+```
+
+**The math**: After enough layers, every node's representation becomes:
+$$\mathbf{h}_v \approx \text{weighted average of all nodes in the graph}$$
+
+*All node embeddings converge to the same vector!*
+
+---
+
+### Numerical Demonstration of Over-Smoothing
+
+*Let me show you exactly how embeddings converge.*
+
+**Starting embeddings (4 nodes, d=2):**
+```
+Layer 0:
+  Node 0: [1.0, 0.0]  ■□
+  Node 1: [0.0, 1.0]  □■
+  Node 2: [0.5, 0.5]  ◧
+  Node 3: [0.8, 0.2]  ■□
+```
+
+**After 2 layers** (connected graph, symmetric normalization):
+```
+Layer 2:
+  Node 0: [0.58, 0.42]  ◧
+  Node 1: [0.52, 0.48]  ◧
+  Node 2: [0.55, 0.45]  ◧
+  Node 3: [0.57, 0.43]  ◧
+```
+
+*Notice that* nodes are becoming more similar!
+
+**After 6 layers:**
+```
+Layer 6:
+  Node 0: [0.575, 0.425]  ○
+  Node 1: [0.575, 0.425]  ○
+  Node 2: [0.575, 0.425]  ○
+  Node 3: [0.575, 0.425]  ○
+```
+
+**All nodes are now IDENTICAL!** We've lost all discriminative power.
+
+**The intuition**: It's like playing "telephone" across the graph. After enough rounds, everyone has heard a garbled mix of everyone's original message.
+
+---
+
+### Measuring Over-Smoothing
+
+**Mean Average Distance (MAD):**
+$$\text{MAD} = \frac{1}{N^2} \sum_{i,j} \|\mathbf{h}_i - \mathbf{h}_j\|_2$$
+
+| Layers | MAD | Interpretation |
+|--------|-----|----------------|
+| 1 | 0.82 | Nodes are distinct |
+| 2 | 0.61 | Some smoothing, still good |
+| 3 | 0.43 | Starting to converge |
+| 4 | 0.25 | Losing information |
+| 6 | 0.08 | Severely over-smoothed |
+| 10 | 0.01 | Essentially identical |
+
+*Can you see why* 2-3 layers is the sweet spot?
+
+---
+
+### Solutions to Over-Smoothing
+
+**1. Use fewer layers** (2-3 is usually optimal)
+
+**2. Skip connections** (preserve original information):
+$$\mathbf{h}_v^{(k+1)} = \mathbf{h}_v^{(k+1)} + \mathbf{h}_v^{(k)}$$
+
+**3. JKNet** (Jumping Knowledge): Concatenate ALL layer outputs, let the model choose:
+$$\mathbf{h}_v^{\text{final}} = [\mathbf{h}_v^{(0)} || \mathbf{h}_v^{(1)} || ... || \mathbf{h}_v^{(K)}]$$
+
+**4. DropEdge**: Randomly drop edges during training to slow down message diffusion
 
 ---
 
@@ -659,6 +868,93 @@ def train_lightgcn(model, graph, interactions, n_epochs=100, lr=0.001, batch_siz
 
 ---
 
+## What Can Go Wrong: GNN Failure Modes
+
+### Failure Mode 1: Over-Smoothing
+
+**Symptom**: All embeddings look the same after training. Recommendations are nearly random.
+
+**Diagnosis**: Check embedding diversity:
+```python
+# Compute pairwise cosine similarity
+similarities = cosine_similarity(embeddings)
+avg_sim = (similarities.sum() - len(embeddings)) / (len(embeddings)**2 - len(embeddings))
+print(f"Average pairwise similarity: {avg_sim:.3f}")
+# If > 0.9, you have over-smoothing
+```
+
+**Cause**: Too many layers (>3-4 on small graphs).
+
+**Solution**:
+- Reduce layers to 2-3
+- Add skip connections
+- Use DropEdge during training
+
+---
+
+### Failure Mode 2: Overfitting on Small Graphs
+
+**Symptom**: Training loss drops to near-zero, but validation metrics get worse.
+
+**Diagnosis**:
+```
+Epoch 10:  Train Loss: 0.42, Val Recall@20: 0.18
+Epoch 50:  Train Loss: 0.05, Val Recall@20: 0.21
+Epoch 100: Train Loss: 0.01, Val Recall@20: 0.15  ← Getting worse!
+```
+
+**Cause**: Too many parameters for sparse data. GNNs with transformations overfit.
+
+**Solution**:
+- Use LightGCN (no feature transformations)
+- Stronger L2 regularization ($\lambda = 10^{-3}$ instead of $10^{-5}$)
+- Early stopping based on validation metrics
+- Dropout on embeddings
+
+---
+
+### Failure Mode 3: Degree Bias
+
+**Symptom**: Popular items always recommended. Long-tail items never surface.
+
+**Diagnosis**: Check recommendation frequency distribution:
+```python
+# Count how often each item is recommended
+rec_counts = Counter(all_recommendations)
+top_10_items = rec_counts.most_common(10)
+# If top 10 items account for 80%+ of recommendations, you have degree bias
+```
+
+**Cause**: High-degree nodes (popular items) dominate message passing. Their embeddings are "averaged" across many users, making them generically appealing.
+
+**Solution**:
+- Use symmetric normalization (already in GCN/LightGCN)
+- Re-weight loss to penalize easy positive examples
+- Post-hoc re-ranking to boost diversity
+
+---
+
+### Failure Mode 4: Cold Start Collapse
+
+**Symptom**: New users/items get random or popularity-based recommendations only.
+
+**Diagnosis**: Filter metrics by user activity level:
+```
+Users with 50+ interactions: Recall@20 = 0.28
+Users with 10-50 interactions: Recall@20 = 0.19
+Users with 1-10 interactions: Recall@20 = 0.04  ← Problem!
+```
+
+**Cause**: GNN embeddings are defined by neighbors. Nodes with few/no neighbors have poor embeddings.
+
+**Solution**:
+- Hybrid approach: Use content features for cold users, GNN for warm
+- Fallback to popularity for cold start
+- Meta-learning for few-shot users
+- Side information (user demographics, item features) in initial embeddings
+
+---
+
 ## Comparison of GNN Models
 
 | Model | Aggregation | Advantage | Disadvantage | Use Case |
@@ -732,7 +1028,7 @@ def train_lightgcn(model, graph, interactions, n_epochs=100, lr=0.001, batch_siz
 2. **Hamilton, W. L., Ying, R., & Leskovec, J. (2017)**. "Inductive Representation Learning on Large Graphs". *NeurIPS*.
    - **GraphSAGE**
 
-3. **Veličković, P., et al. (2018)**. "Graph Attention Networks". *ICLR*.
+3. **Velickovic, P., et al. (2018)**. "Graph Attention Networks". *ICLR*.
    - **GAT**
 
 4. **Ying, R., et al. (2018)**. "Graph Convolutional Neural Networks for Web-Scale Recommender Systems". *KDD*.
