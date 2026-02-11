@@ -81,6 +81,62 @@ where:
 - $\tilde{\mathbf{D}}$ = degree matrix of $\tilde{\mathbf{A}}$
 - $\mathbf{W}^{(k)}$ = learnable weights
 
+---
+
+### Deriving the Normalization: Why $\tilde{\mathbf{D}}^{-1/2} \tilde{\mathbf{A}} \tilde{\mathbf{D}}^{-1/2}$?
+
+*Let me show you step-by-step why this normalization is necessary.*
+
+**Step 1: Naive aggregation (just sum neighbors)**
+
+$$\mathbf{h}_v^{(k+1)} = \sum_{u \in N(v)} \mathbf{h}_u^{(k)}$$
+
+**What goes wrong?**
+
+```
+Node A: 2 neighbors  → aggregated sum ≈ 2 × (average embedding)
+Node B: 100 neighbors → aggregated sum ≈ 100 × (average embedding)
+```
+
+Node B's representation is **50x larger** just because it has more neighbors!
+
+After a few layers, high-degree nodes explode in magnitude.
+
+---
+
+**Step 2: Normalize by degree (divide by neighbor count)**
+
+$$\mathbf{h}_v^{(k+1)} = \frac{1}{|N(v)|} \sum_{u \in N(v)} \mathbf{h}_u^{(k)}$$
+
+This is **row normalization**: $\tilde{\mathbf{D}}^{-1} \tilde{\mathbf{A}}$
+
+**What goes wrong now?**
+
+Consider:
+- Node A has 2 neighbors, each with degree 100
+- Node B has 2 neighbors, each with degree 2
+
+Both A and B average over 2 neighbors, but:
+- A's neighbors are "hubs" (connected to many other nodes) — their information is diluted
+- B's neighbors are "specialists" (connected to few nodes) — their information is focused
+
+*We're not accounting for how "important" each neighbor's signal is.*
+
+---
+
+**Step 3: Symmetric normalization (the GCN solution)**
+
+$$\mathbf{h}_v^{(k+1)} = \sum_{u \in N(v)} \frac{1}{\sqrt{|N(v)|} \cdot \sqrt{|N(u)|}} \mathbf{h}_u^{(k)}$$
+
+**The factor $\frac{1}{\sqrt{|N(v)|} \cdot \sqrt{|N(u)|}}$ means:**
+
+- Divide by $\sqrt{|N(v)|}$: "I have many neighbors, so each contributes less"
+- Divide by $\sqrt{|N(u)|}$: "This neighbor is very popular, so their signal is diluted"
+
+**In matrix form**: $\tilde{\mathbf{D}}^{-1/2} \tilde{\mathbf{A}} \tilde{\mathbf{D}}^{-1/2}$
+
+**Why square root?** It preserves the **spectral properties** of the graph Laplacian, making training more stable. (Deep math reason: eigenvalues stay in [-1, 1].)
+
 **Normalization**: $\tilde{\mathbf{D}}^{-1/2} \tilde{\mathbf{A}} \tilde{\mathbf{D}}^{-1/2}$ normalizes by degree (prevents large-degree nodes from dominating).
 
 ---
@@ -265,6 +321,110 @@ where $e_{uv} = \text{LeakyReLU}(\mathbf{a}^T [\mathbf{W}\mathbf{h}_u || \mathbf
 $$\mathbf{h}_v' = \sigma\left(\sum_{u \in N(v)} \alpha_{uv} \mathbf{W} \mathbf{h}_u\right)$$
 
 **Benefit**: Automatically learns which neighbors are important.
+
+---
+
+### Step-by-Step GAT Calculation with 3 Nodes
+
+*Let me walk through the attention mechanism with concrete numbers.*
+
+**Graph**:
+```
+    Node A ─── Node B
+       \        /
+        \      /
+         Node C
+```
+
+Node B has neighbors {A, C}. Let's compute B's new representation.
+
+**Initial embeddings** (d=2 for simplicity):
+```
+h_A = [0.5, 0.3]
+h_B = [0.8, 0.2]
+h_C = [0.1, 0.9]
+```
+
+**Step 1: Transform embeddings** (W is 2×2 identity for simplicity)
+```
+Wh_A = [0.5, 0.3]
+Wh_B = [0.8, 0.2]
+Wh_C = [0.1, 0.9]
+```
+
+**Step 2: Compute attention scores for B's neighbors**
+
+For edge A→B: Concatenate [Wh_A || Wh_B] = [0.5, 0.3, 0.8, 0.2]
+For edge C→B: Concatenate [Wh_C || Wh_B] = [0.1, 0.9, 0.8, 0.2]
+
+**Attention vector** $\mathbf{a}$ (learned, assume $\mathbf{a} = [0.2, 0.1, 0.3, 0.4]$):
+
+$$e_{AB} = \text{LeakyReLU}(\mathbf{a}^T [0.5, 0.3, 0.8, 0.2])$$
+$$= \text{LeakyReLU}(0.2 \cdot 0.5 + 0.1 \cdot 0.3 + 0.3 \cdot 0.8 + 0.4 \cdot 0.2)$$
+$$= \text{LeakyReLU}(0.1 + 0.03 + 0.24 + 0.08) = \text{LeakyReLU}(0.45) = 0.45$$
+
+$$e_{CB} = \text{LeakyReLU}(\mathbf{a}^T [0.1, 0.9, 0.8, 0.2])$$
+$$= \text{LeakyReLU}(0.02 + 0.09 + 0.24 + 0.08) = \text{LeakyReLU}(0.43) = 0.43$$
+
+**Step 3: Softmax to get attention weights**
+
+$$\alpha_{AB} = \frac{e^{0.45}}{e^{0.45} + e^{0.43}} = \frac{1.568}{1.568 + 1.537} = \frac{1.568}{3.105} \approx 0.505$$
+
+$$\alpha_{CB} = \frac{e^{0.43}}{e^{0.45} + e^{0.43}} \approx 0.495$$
+
+*Both neighbors get roughly equal attention (they're similarly relevant).*
+
+**Step 4: Weighted aggregation**
+
+$$\mathbf{h}_B' = \sigma(0.505 \cdot [0.5, 0.3] + 0.495 \cdot [0.1, 0.9])$$
+$$= \sigma([0.253 + 0.050, 0.152 + 0.446])$$
+$$= \sigma([0.303, 0.598])$$
+
+*B's new representation is a weighted mix of A and C's features.*
+
+---
+
+### The Over-Smoothing Problem
+
+*What happens if we stack too many GNN layers?*
+
+**The issue**: After many layers, ALL nodes have seen information from ALL other nodes.
+
+**Layer-by-layer view**:
+```
+Layer 0: Node knows itself
+Layer 1: Node knows 1-hop neighbors
+Layer 2: Node knows 2-hop neighbors (neighbors of neighbors)
+...
+Layer 5: Node knows 5-hop neighbors (almost everyone!)
+```
+
+**The problem**:
+
+After enough layers, every node's representation becomes:
+$$\mathbf{h}_v \approx \text{average of all nodes in the graph}$$
+
+*All node embeddings converge to the same vector!*
+
+**Visual**:
+```
+Layer 1: Nodes are distinguishable
+         A ●    B ●    C ●    D ●
+
+Layer 3: Still somewhat different
+         A ◐    B ◐    C ◐    D ◐
+
+Layer 6: All the same!
+         A ○    B ○    C ○    D ○
+         (over-smoothed)
+```
+
+**The intuition**: It's like playing "telephone" across the graph. After enough rounds, everyone has heard a garbled mix of everyone's original message.
+
+**Solutions**:
+1. **Use fewer layers** (2-3 is usually optimal)
+2. **Skip connections**: $\mathbf{h}_v^{(k+1)} = \mathbf{h}_v^{(k+1)} + \mathbf{h}_v^{(k)}$ (preserve original)
+3. **JKNet**: Concatenate ALL layer outputs, let the model choose
 
 ---
 

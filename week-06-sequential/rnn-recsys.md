@@ -65,6 +65,46 @@ $$\mathbf{h}_t = \tanh(\mathbf{W}_{hh} \mathbf{h}_{t-1} + \mathbf{W}_{xh} \mathb
 
 **Problem**: **Vanishing gradients** (can't learn long-term dependencies).
 
+---
+
+#### The Vanishing Gradient Problem: A Concrete Example
+
+*Why can't vanilla RNNs learn long-term patterns?*
+
+**Scenario**: User's 20-item browsing history. First item was a laptop, last item is a laptop stand.
+
+```
+Position 1:  [laptop] ← We should remember this!
+Position 2:  [laptop_case]
+Position 3:  [wireless_mouse]
+...
+Position 18: [coffee]
+Position 19: [snacks]
+Position 20: [laptop_stand] ← Predict next item
+```
+
+**The gradient problem**:
+
+To learn "laptop at position 1 predicts laptop accessories at position 20", gradients must flow back 19 steps.
+
+**Gradient at position 1** = gradient at position 20 × (derivative at step 19) × (derivative at step 18) × ... × (derivative at step 1)
+
+**The math**: $\tanh$ derivative is always < 1. Multiplying many numbers < 1:
+
+$$0.5 \times 0.5 \times 0.5 \times \ldots \times 0.5 = 0.5^{19} \approx 0.0000019$$
+
+*The gradient is essentially zero!* The network can't learn that position 1 matters for position 20.
+
+**Visual**:
+```
+Position:    1    2    3    ...   18   19   20
+Gradient:   1e-6 1e-5 1e-4  ...  0.1  0.5  1.0
+            ↑                              ↑
+        Vanished!                    Strong gradient
+```
+
+**LSTM/GRU solution**: Gates create "highways" for gradients to flow without shrinking.
+
 **Solution**: Use LSTM or GRU.
 
 ---
@@ -101,6 +141,45 @@ $$\mathbf{r}_t = \sigma(\mathbf{W}_r [\mathbf{h}_{t-1}, \mathbf{x}_t])$$
 $$\mathbf{z}_t = \sigma(\mathbf{W}_z [\mathbf{h}_{t-1}, \mathbf{x}_t])$$
 $$\tilde{\mathbf{h}}_t = \tanh(\mathbf{W} [\mathbf{r}_t \odot \mathbf{h}_{t-1}, \mathbf{x}_t])$$
 $$\mathbf{h}_t = (1 - \mathbf{z}_t) \odot \mathbf{h}_{t-1} + \mathbf{z}_t \odot \tilde{\mathbf{h}}_t$$
+
+---
+
+#### The Intuition: What Do These Gates Actually Do?
+
+*Let me make this concrete with a shopping example.*
+
+**Scenario**: User's browsing history on Amazon:
+```
+[laptop] → [laptop_bag] → [mouse] → [coffee_mug] → [keyboard]
+```
+
+**At step 5** (after seeing "keyboard"):
+
+**Reset gate $\mathbf{r}_t$**: "Should I forget some of the past?"
+
+- If $r_t \approx 0$: "Forget everything, start fresh"
+  - *Use case*: User was browsing electronics, now switched to kitchen items
+  - The old "electronics" context is no longer relevant
+
+- If $r_t \approx 1$: "Remember everything"
+  - *Use case*: User is still in the same shopping session/intent
+  - Past context is still valuable
+
+**Update gate $\mathbf{z}_t$**: "How much should the new item change my memory?"
+
+- If $z_t \approx 0$: "Ignore this item, keep my old state"
+  - *Use case*: The coffee mug was a random browse, not representative
+
+- If $z_t \approx 1$: "This item is important, update heavily"
+  - *Use case*: The keyboard is clearly part of the electronics shopping intent
+
+**The update equation explained**:
+
+$$\mathbf{h}_t = \underbrace{(1 - \mathbf{z}_t) \odot \mathbf{h}_{t-1}}_{\text{keep from past}} + \underbrace{\mathbf{z}_t \odot \tilde{\mathbf{h}}_t}_{\text{add from new}}$$
+
+It's a **weighted average** between:
+- The old memory ($\mathbf{h}_{t-1}$)
+- The new candidate memory ($\tilde{\mathbf{h}}_t$)
 
 **Trade-off**: GRU is faster (fewer params), LSTM may be more accurate for very long sequences.
 
@@ -376,6 +455,52 @@ where $\alpha_t$ = attention weight for item at position $t$.
 $$\alpha_t = \frac{\exp(e_t)}{\sum_{t'=1}^T \exp(e_{t'})}$$
 
 where $e_t = \text{score}(\mathbf{h}_t, \mathbf{h}_T)$ (similarity between current hidden state and final hidden state).
+
+---
+
+#### Attention Weights Example: What the Model "Looks At"
+
+*Let me show you what learned attention looks like.*
+
+**User's session**: Browsing electronics on Amazon
+
+```
+Position 1: [MacBook Pro]
+Position 2: [USB-C Hub]
+Position 3: [Coffee Mug]      ← random browse
+Position 4: [Laptop Stand]
+Position 5: [Water Bottle]    ← random browse
+Position 6: [Keyboard]
+```
+
+**Predicting next item after position 6**:
+
+The attention mechanism computes weights:
+
+| Position | Item | Attention Weight | Interpretation |
+|----------|------|------------------|----------------|
+| 1 | MacBook Pro | **0.35** | Very relevant (main item) |
+| 2 | USB-C Hub | **0.20** | Relevant (accessory) |
+| 3 | Coffee Mug | 0.05 | Ignored (unrelated) |
+| 4 | Laptop Stand | **0.22** | Relevant (accessory) |
+| 5 | Water Bottle | 0.03 | Ignored (unrelated) |
+| 6 | Keyboard | **0.15** | Relevant (just viewed) |
+
+**Visualization**:
+```
+MacBook   USB-C    Mug    Stand   Water   Keyboard
+ Pro      Hub                     Bottle
+  │        │        │       │       │        │
+  ▼        ▼        ▼       ▼       ▼        ▼
+[0.35]   [0.20]   [0.05] [0.22]  [0.03]   [0.15]
+  ████     ███       █     ███      ·       ██
+```
+
+**What the model learned**: Focus on electronics, ignore random items.
+
+**The prediction**: High probability for items like "Monitor", "Mouse", "USB-C Cable".
+
+*Notice how* the model automatically discovered that coffee mugs and water bottles are noise, even though we never told it about product categories!
 
 ---
 

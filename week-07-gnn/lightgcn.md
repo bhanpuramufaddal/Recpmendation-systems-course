@@ -123,6 +123,80 @@ $$\mathbf{h}_i^{(l+1)} = \sum_{j \in \mathcal{N}(i)} \frac{1}{\sqrt{|\mathcal{N}
 
 ---
 
+### Why Removing Features HELPS: The Counter-Intuitive Insight
+
+*This seems backwards — why would simpler be better?*
+
+#### The Parameter Count Argument
+
+**NGCF** (complex GCN) parameters per layer:
+- $W_1 \in \mathbb{R}^{d \times d}$: self-connection → $d^2$ parameters
+- $W_2 \in \mathbb{R}^{d \times d}$: neighbor message → $d^2$ parameters
+- $W_3 \in \mathbb{R}^{d \times d}$: interaction → $d^2$ parameters
+- **Total per layer**: $3d^2$
+- **With 3 layers and d=64**: $3 \times 3 \times 64^2 = 36,864$ parameters just in transformations!
+
+**LightGCN** transformation parameters: **0**
+
+**Why does this matter for recommendation?**
+
+The training data is extremely sparse:
+- MovieLens-1M: 1M ratings, but 6K users × 4K items = 24M possible
+- **Sparsity: 96%**
+
+With 36K+ transformation parameters but only 1M training signals, NGCF **overfits**.
+
+---
+
+#### The Regularization Argument
+
+*Linear propagation acts as implicit regularization.*
+
+**LightGCN propagation**:
+$$\mathbf{h}_u^{(1)} = \sum_{\text{items rated by } u} \frac{\mathbf{h}_i^{(0)}}{\sqrt{|N(u)||N(i)|}}$$
+
+This is essentially **averaging** the embeddings of items a user rated.
+
+**What averaging does**:
+1. **Smooths noise**: Individual item embeddings might be noisy, but the average is stable
+2. **Regularizes**: Prevents any single item from dominating the user representation
+3. **Shares information**: If item A and item B are both rated by many of the same users, their embeddings naturally become similar
+
+*Can you see how* this "simple" averaging is actually doing something sophisticated?
+
+---
+
+#### The Collaborative Signal Argument
+
+**What we ACTUALLY learn from in CF**:
+- User 1 liked items {A, B, C}
+- User 2 liked items {A, B, D}
+- Therefore: A and B should be similar (co-rated often)
+
+**What we DON'T have** (unlike NLP or vision):
+- No rich features (text, pixels)
+- No semantic meaning of "user 1" or "item A"
+- Just IDs and interaction patterns
+
+**LightGCN's philosophy**: The ONLY signal is the graph structure. Don't try to add complexity (transformations, nonlinearities) that has nothing to learn from.
+
+---
+
+### The Ablation as Regularization
+
+*Each component removal makes the model simpler = less overfitting.*
+
+| Variant | Recall@20 | Interpretation |
+|---------|-----------|----------------|
+| NGCF (full) | 0.2090 | Baseline (overfit) |
+| -NonLinear | 0.2210 | +5.7% — ReLU was adding noise |
+| -FeatureTransform | 0.2350 | +12.4% — W matrices were overfitting |
+| **LightGCN** | **0.2424** | +16.0% — Pure signal, no noise |
+
+**The lesson**: For sparse CF data, the enemy is overfitting, not underfitting. Remove complexity until you hit the sweet spot.
+
+---
+
 ## LightGCN Architecture
 
 ### Layer-wise Propagation

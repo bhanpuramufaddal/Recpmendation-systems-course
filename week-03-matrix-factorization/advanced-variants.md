@@ -477,6 +477,51 @@ if __name__ == "__main__":
 
 ## Factorization Machines (FM)
 
+### The Problem: Why Do We Need Feature Interactions?
+
+*Before we dive into the math, let me show you why standard approaches fail.*
+
+**Scenario**: You're building a movie recommendation system. You have:
+- User features: age, gender, location
+- Movie features: genre, director, year
+- Context: time of day, device
+
+**The naive approach** - just use linear regression:
+
+$$\hat{y} = w_0 + w_{age} \cdot \text{age} + w_{male} \cdot \text{male} + w_{action} \cdot \text{action} + \ldots$$
+
+**What goes wrong?** Consider this pattern in your data:
+- Young men love action movies (age < 25 AND male AND action → high rating)
+- Older women love drama (age > 50 AND female AND drama → high rating)
+
+The linear model sees these as *independent* effects:
+- $w_{male}$ captures average effect of being male
+- $w_{action}$ captures average effect of action genre
+
+*But the magic happens in the combination!* A young male watching an action movie isn't just "young effect + male effect + action effect" — it's *multiplicatively* more predictive.
+
+**Can you see why** a linear model would underestimate how much young men like action movies?
+
+---
+
+### The Naive Solution: Polynomial Features
+
+**Idea**: Explicitly model all pairs:
+
+$$\hat{y} = w_0 + \sum_i w_i x_i + \sum_i \sum_{j>i} w_{ij} x_i x_j$$
+
+**The problem**: With $n$ features, you need $\binom{n}{2} = \frac{n(n-1)}{2}$ interaction parameters!
+
+**Example**:
+- 1000 users + 5000 items + 50 features = 6050 total features
+- Interactions: $\frac{6050 \times 6049}{2} \approx 18$ million parameters!
+- Most feature pairs never appear together in training data
+- Result: **severe overfitting** on sparse data
+
+*What would happen if* User #7 never watched any Action movies in training? The weight $w_{user7, action}$ would be random noise.
+
+---
+
 ### Motivation
 
 **Problem**: How to incorporate side information (features) into MF?
@@ -489,6 +534,10 @@ if __name__ == "__main__":
 **Challenge**: Feature interactions are critical!
 - "Age × Genre": Young users like action, older users like drama
 - "Gender × Director": Women prefer certain directors
+
+**The FM insight**: Don't learn separate $w_{ij}$ for each pair. Instead, give each feature a **latent vector** $\mathbf{v}_i$, and model interactions as **dot products** $\langle \mathbf{v}_i, \mathbf{v}_j \rangle$.
+
+*Why does this help?* If User #7 likes Sci-Fi and Thriller, their vector $\mathbf{v}_{user7}$ will be similar to both genre vectors. When we encounter User #7 + Action (never seen!), we can still make a reasonable prediction because $\mathbf{v}_{action}$ is similar to $\mathbf{v}_{scifi}$.
 
 ---
 
@@ -504,31 +553,250 @@ $$\hat{y}(\mathbf{x}) = w_0 + \sum_{i=1}^n w_i x_i + \sum_{i=1}^n \sum_{j=i+1}^n
 
 where:
 - $\mathbf{x} \in \mathbb{R}^n$: Feature vector (user, item, context)
-- $w_0$: Global bias
-- $w_i$: Weight for feature $i$
-- $\mathbf{v}_i \in \mathbb{R}^k$: Latent factor for feature $i$
+- $w_0$: Global bias (average rating across all data)
+- $w_i$: Weight for feature $i$ (main effect)
+- $\mathbf{v}_i \in \mathbb{R}^k$: Latent factor for feature $i$ (k-dimensional "personality" vector)
 - $\langle \mathbf{v}_i, \mathbf{v}_j \rangle = \sum_{f=1}^k v_{if} \cdot v_{jf}$: Interaction between features $i$ and $j$
 
 **Components**:
-1. **Linear term**: $\sum w_i x_i$
-2. **Pairwise interactions**: $\sum_{i < j} \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j$
+1. **Global bias**: $w_0$ — "What's the average rating?"
+2. **Linear term**: $\sum w_i x_i$ — "How does each feature affect rating independently?"
+3. **Pairwise interactions**: $\sum_{i < j} \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j$ — "How do features interact?"
 
 ---
 
-### Efficient Computation
+### What Do Latent Factors Mean? (The Intuition)
+
+*Before I show you the formula, what do you think* $\mathbf{v}_i$ *should represent?*
+
+Each feature gets a k-dimensional vector that captures its **"interaction profile"**:
+
+**Example with k=3 dimensions** (conceptually):
+- Dimension 1: "Intensity" (calm ↔ exciting)
+- Dimension 2: "Emotional" (cerebral ↔ emotional)
+- Dimension 3: "Social" (solo experience ↔ social experience)
+
+| Feature | $\mathbf{v}$ vector | Interpretation |
+|---------|---------------------|----------------|
+| User: Alice | [0.8, -0.3, 0.5] | Likes exciting, cerebral, social |
+| User: Bob | [0.2, 0.7, -0.4] | Likes calm, emotional, solo |
+| Genre: Action | [0.9, -0.2, 0.3] | Exciting, cerebral, somewhat social |
+| Genre: Drama | [0.1, 0.8, 0.2] | Calm, emotional, social |
+
+**The interaction** $\langle \mathbf{v}_{Alice}, \mathbf{v}_{Action} \rangle$:
+$$= 0.8 \times 0.9 + (-0.3) \times (-0.2) + 0.5 \times 0.3 = 0.72 + 0.06 + 0.15 = 0.93$$
+
+High positive value → Alice and Action movies are compatible!
+
+**The interaction** $\langle \mathbf{v}_{Bob}, \mathbf{v}_{Action} \rangle$:
+$$= 0.2 \times 0.9 + 0.7 \times (-0.2) + (-0.4) \times 0.3 = 0.18 - 0.14 - 0.12 = -0.08$$
+
+Near zero/negative → Bob and Action movies are not a great match.
+
+*Can you see why* this is more powerful than just having "Bob likes action = +0.3"? The latent factors capture *why* Bob might not like action (he prefers calm, emotional experiences).
+
+---
+
+### Efficient Computation: The Key Mathematical Insight
 
 **Naive complexity**: $O(kn^2)$ for pairwise interactions (expensive!)
 
-**Clever reformulation**:
+*Let me walk you through* why the naive approach is slow and how we fix it.
 
-$$\sum_{i=1}^n \sum_{j=i+1}^n \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j = \frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_{i=1}^n v_{if} x_i \right)^2 - \sum_{i=1}^n v_{if}^2 x_i^2 \right]$$
+**Step 1: The naive formula**
 
-**Reduced complexity**: $O(kn)$ (linear in number of features!)
+$$\text{Interactions} = \sum_{i=1}^n \sum_{j=i+1}^n \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j$$
 
-**Proof** (expand and rearrange):
-$$\sum_{i < j} v_{if} v_{jf} x_i x_j = \frac{1}{2} \left[ \left( \sum_i v_{if} x_i \right)^2 - \sum_i v_{if}^2 x_i^2 \right]$$
+For each of the $\binom{n}{2}$ pairs, we compute a k-dimensional dot product. That's $O(kn^2)$ operations.
 
-This allows efficient computation even with millions of features!
+**Step 2: The key insight — Expand the square**
+
+*What if we could compute all interactions in one shot?* Consider:
+
+$$\left( \sum_{i=1}^n v_{if} x_i \right)^2 = \sum_{i=1}^n \sum_{j=1}^n v_{if} v_{jf} x_i x_j$$
+
+This includes **all pairs** (including $i=j$), but we only want $i < j$.
+
+**Step 3: Separate diagonal from off-diagonal**
+
+$$\sum_{i=1}^n \sum_{j=1}^n v_{if} v_{jf} x_i x_j = \underbrace{\sum_{i=1}^n v_{if}^2 x_i^2}_{\text{diagonal } (i=j)} + \underbrace{2 \sum_{i < j} v_{if} v_{jf} x_i x_j}_{\text{off-diagonal } (i \neq j)}$$
+
+Solving for the off-diagonal (what we want):
+
+$$\sum_{i < j} v_{if} v_{jf} x_i x_j = \frac{1}{2} \left[ \left( \sum_{i=1}^n v_{if} x_i \right)^2 - \sum_{i=1}^n v_{if}^2 x_i^2 \right]$$
+
+**Step 4: Sum over all latent dimensions**
+
+$$\sum_{i < j} \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j = \frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_{i=1}^n v_{if} x_i \right)^2 - \sum_{i=1}^n v_{if}^2 x_i^2 \right]$$
+
+**Reduced complexity**: $O(kn)$ — linear in number of features!
+
+**Why this works computationally**:
+1. Compute $\sum_{i=1}^n v_{if} x_i$ for each $f$: $O(kn)$
+2. Square it: $O(k)$
+3. Compute $\sum_{i=1}^n v_{if}^2 x_i^2$ for each $f$: $O(kn)$
+4. Subtract and sum: $O(k)$
+
+**Total**: $O(kn)$ instead of $O(kn^2)$!
+
+---
+
+### Numerical Walkthrough: A Complete Example
+
+*Let's work through a concrete prediction step by step.*
+
+**Setup**: Predict rating for User 7 watching Movie 42 (an Action film).
+
+**Feature vector** (one-hot encoded + binary features):
+$$\mathbf{x} = [\underbrace{0,\ldots,0,1,0,\ldots,0}_{\text{user ID (position 7)}}, \underbrace{0,\ldots,0,1,0,\ldots,0}_{\text{movie ID (position 42)}}, \underbrace{1}_{\text{Genre=Action}}]$$
+
+For simplicity, let's say:
+- Feature 7 is User 7 (one-hot): $x_7 = 1$
+- Feature 50 is Movie 42 (one-hot): $x_{50} = 1$
+- Feature 100 is Genre=Action (binary): $x_{100} = 1$
+- All other $x_i = 0$
+
+**Model parameters** (k=2 latent factors):
+
+| Parameter | Value |
+|-----------|-------|
+| $w_0$ | 3.5 |
+| $w_7$ (User 7 bias) | +0.3 |
+| $w_{50}$ (Movie 42 bias) | +0.5 |
+| $w_{100}$ (Action bias) | +0.2 |
+| $\mathbf{v}_7$ (User 7 vector) | [0.5, 0.3] |
+| $\mathbf{v}_{50}$ (Movie 42 vector) | [0.6, -0.2] |
+| $\mathbf{v}_{100}$ (Action vector) | [0.4, 0.5] |
+
+**Step 1: Global bias**
+$$w_0 = 3.5$$
+
+**Step 2: Linear terms** (only non-zero features contribute)
+$$\sum_i w_i x_i = w_7 \cdot 1 + w_{50} \cdot 1 + w_{100} \cdot 1 = 0.3 + 0.5 + 0.2 = 1.0$$
+
+**Step 3: Pairwise interactions** (3 pairs with non-zero product)
+
+1. User 7 × Movie 42:
+   $$\langle \mathbf{v}_7, \mathbf{v}_{50} \rangle = 0.5 \times 0.6 + 0.3 \times (-0.2) = 0.30 - 0.06 = 0.24$$
+
+2. User 7 × Action:
+   $$\langle \mathbf{v}_7, \mathbf{v}_{100} \rangle = 0.5 \times 0.4 + 0.3 \times 0.5 = 0.20 + 0.15 = 0.35$$
+
+3. Movie 42 × Action:
+   $$\langle \mathbf{v}_{50}, \mathbf{v}_{100} \rangle = 0.6 \times 0.4 + (-0.2) \times 0.5 = 0.24 - 0.10 = 0.14$$
+
+Total interactions: $0.24 + 0.35 + 0.14 = 0.73$
+
+**Final prediction**:
+$$\hat{y} = 3.5 + 1.0 + 0.73 = 5.23$$
+
+After clipping to [1, 5]: **Predicted rating = 5.0 stars**
+
+*What does this tell us?* User 7 has positive interactions with both the movie and the genre — they're predicted to love this movie!
+
+---
+
+### Gradient Derivations: How Does FM Learn?
+
+*Now that you understand the prediction, let's derive how FM learns from errors.*
+
+**Loss function** (squared error for one sample):
+
+$$L = \frac{1}{2}(y - \hat{y})^2$$
+
+where $e = y - \hat{y}$ is the prediction error.
+
+**We need gradients for three types of parameters:**
+
+---
+
+#### Gradient for Global Bias $w_0$
+
+$$\frac{\partial L}{\partial w_0} = \frac{\partial L}{\partial \hat{y}} \cdot \frac{\partial \hat{y}}{\partial w_0} = -e \cdot 1 = -e$$
+
+**Intuition**: If we underpredict ($e > 0$), increase $w_0$. If we overpredict ($e < 0$), decrease $w_0$.
+
+**Update rule** (with learning rate $\eta$):
+$$w_0 \leftarrow w_0 + \eta \cdot e$$
+
+---
+
+#### Gradient for Feature Weights $w_i$
+
+$$\frac{\partial L}{\partial w_i} = -e \cdot \frac{\partial \hat{y}}{\partial w_i} = -e \cdot x_i$$
+
+**Intuition**: The gradient is proportional to both the error AND the feature value. If feature $i$ is "on" ($x_i = 1$) and we underpredict, increase $w_i$.
+
+**Update rule**:
+$$w_i \leftarrow w_i + \eta \cdot e \cdot x_i$$
+
+---
+
+#### Gradient for Latent Factors $v_{if}$ (The Tricky One!)
+
+*This is where it gets interesting.* We need:
+
+$$\frac{\partial \hat{y}}{\partial v_{if}}$$
+
+Recall the efficient form:
+$$\text{Interactions} = \frac{1}{2} \sum_{f=1}^k \left[ \left( \sum_{j=1}^n v_{jf} x_j \right)^2 - \sum_{j=1}^n v_{jf}^2 x_j^2 \right]$$
+
+Let $S_f = \sum_{j=1}^n v_{jf} x_j$ (sum for latent dimension $f$).
+
+**Step 1**: Differentiate the squared term
+$$\frac{\partial}{\partial v_{if}} \left( S_f \right)^2 = 2 S_f \cdot \frac{\partial S_f}{\partial v_{if}} = 2 S_f \cdot x_i$$
+
+**Step 2**: Differentiate the diagonal correction term
+$$\frac{\partial}{\partial v_{if}} \left( v_{if}^2 x_i^2 \right) = 2 v_{if} x_i^2$$
+
+**Step 3**: Combine (with the 1/2 factor)
+$$\frac{\partial \hat{y}}{\partial v_{if}} = \frac{1}{2} \left[ 2 S_f \cdot x_i - 2 v_{if} x_i^2 \right] = x_i \left( S_f - v_{if} x_i \right)$$
+
+Substituting $S_f = \sum_j v_{jf} x_j$:
+
+$$\frac{\partial \hat{y}}{\partial v_{if}} = x_i \left( \sum_{j=1}^n v_{jf} x_j - v_{if} x_i \right)$$
+
+**Final gradient**:
+$$\frac{\partial L}{\partial v_{if}} = -e \cdot x_i \left( \sum_{j=1}^n v_{jf} x_j - v_{if} x_i \right)$$
+
+**Update rule**:
+$$v_{if} \leftarrow v_{if} + \eta \cdot e \cdot x_i \left( \sum_{j \neq i} v_{jf} x_j \right)$$
+
+**Intuition**: The latent factor $v_{if}$ is updated based on:
+1. The error $e$ (how wrong were we?)
+2. The feature value $x_i$ (is this feature active?)
+3. The "context" $\sum_{j \neq i} v_{jf} x_j$ (what other features are present and what are their latent factors?)
+
+*Can you see why* this makes sense? If User 7 watches an Action movie and we underpredict, we should move $\mathbf{v}_{user7}$ *towards* $\mathbf{v}_{action}$ (increase their dot product).
+
+---
+
+#### Numerical Gradient Example
+
+*Let's verify our gradient with the previous example.*
+
+**Setup** (same as before):
+- Actual rating: $y = 5$
+- Predicted: $\hat{y} = 5.23$ (clipped to 5.0, but use 5.23 for gradients)
+- Error: $e = 5 - 5.23 = -0.23$ (we overpredicted)
+
+**Compute $S_f$ for each latent dimension** (f=1 and f=2):
+
+For $f=1$ (first latent dimension):
+$$S_1 = v_{7,1} \cdot x_7 + v_{50,1} \cdot x_{50} + v_{100,1} \cdot x_{100} = 0.5 \cdot 1 + 0.6 \cdot 1 + 0.4 \cdot 1 = 1.5$$
+
+For $f=2$:
+$$S_2 = 0.3 \cdot 1 + (-0.2) \cdot 1 + 0.5 \cdot 1 = 0.6$$
+
+**Gradient for $v_{7,1}$** (User 7's first latent factor):
+$$\frac{\partial L}{\partial v_{7,1}} = -e \cdot x_7 \cdot (S_1 - v_{7,1} \cdot x_7) = -(-0.23) \cdot 1 \cdot (1.5 - 0.5 \cdot 1) = 0.23 \cdot 1.0 = 0.23$$
+
+**Update** (with $\eta = 0.01$):
+$$v_{7,1}^{new} = 0.5 + 0.01 \cdot (-0.23) = 0.5 - 0.0023 = 0.4977$$
+
+*The gradient is positive but the error is negative, so we decrease $v_{7,1}$.*
+
+This makes sense: we overpredicted, so we're slightly decreasing the interaction strength between User 7 and the other active features.
 
 ---
 
@@ -547,105 +815,216 @@ $$\hat{r}_{ui} = \langle \mathbf{v}_u, \mathbf{v}_i \rangle$$
 
 ---
 
-### Implementation
+### What Can Go Wrong? Edge Cases and Failure Modes
+
+*Before implementing, let's understand when FM might fail.*
+
+**1. Feature Sparsity: When Latent Factors Can't Learn**
+
+**Problem**: If a feature appears only once in training, its latent vector $\mathbf{v}_i$ can't learn meaningful interactions.
+
+**Example**:
+- User 12345 rated only 1 movie
+- $\mathbf{v}_{user12345}$ is trained on only 1 gradient update
+- Result: Random noise, not useful for predictions
+
+**Solution**: Regularization ($\lambda \|\mathbf{V}\|^2$) pulls rare features toward zero. Also consider minimum frequency thresholds.
+
+---
+
+**2. The Cold Start Problem**
+
+**Problem**: New features (users, items) have no interaction data.
+
+**Scenario**: Movie released yesterday. $\mathbf{v}_{new\_movie} = $ random initialization.
+
+**Partial solution**: FM with side features! If the new movie has genre=Action, director=Nolan, the linear terms ($w_{action}$, $w_{nolan}$) and their learned interactions still contribute.
+
+*This is precisely why FM is better than pure MF for cold start.*
+
+---
+
+**3. Choosing k (Number of Latent Factors)**
+
+*What would happen if* k is too small?
+- Can't capture complex interaction patterns
+- Underfitting
+
+*What would happen if* k is too large?
+- Too many parameters for sparse data
+- Overfitting
+- Slower training
+
+**Rule of thumb**: Start with $k = 8$ to $k = 64$. Validate on held-out data.
+
+---
+
+**4. Feature Scale Issues**
+
+**Problem**: Non-binary features with different scales.
+
+**Example**:
+- $x_{age} = 35$ (continuous)
+- $x_{is\_action} = 1$ (binary)
+
+The interaction $\langle \mathbf{v}_{age}, \mathbf{v}_{action} \rangle \cdot 35 \cdot 1$ dominates!
+
+**Solution**: Normalize continuous features to [0, 1] or standardize to mean=0, std=1.
+
+---
+
+### Implementation (Annotated with Example Values)
 
 ```python
 import numpy as np
 
 class FactorizationMachine:
     def __init__(self, n_factors=10, learning_rate=0.01, reg=0.01, n_epochs=20):
-        self.k = n_factors
-        self.lr = learning_rate
-        self.reg = reg
-        self.n_epochs = n_epochs
+        self.k = n_factors        # Latent dimension (e.g., k=8 means 8-dimensional vectors)
+        self.lr = learning_rate   # Step size for SGD (typical: 0.01-0.1)
+        self.reg = reg            # L2 regularization strength (prevents overfitting)
+        self.n_epochs = n_epochs  # Number of passes through training data
 
     def fit(self, X, y):
         """
         X: (n_samples, n_features) feature matrix
-        y: (n_samples,) target vector
+           Example: 1000 samples, 6050 features (1000 users + 5000 items + 50 context)
+        y: (n_samples,) target vector (ratings)
+           Example: [4.5, 3.0, 5.0, ...]
         """
         n_samples, self.n_features = X.shape
 
-        # Initialize parameters
-        self.w0 = 0.0
-        self.w = np.zeros(self.n_features)
-        self.V = np.random.normal(0, 0.01, (self.n_features, self.k))
+        # === INITIALIZATION ===
+        # Global bias: start at 0, will converge to mean rating
+        self.w0 = 0.0  # After training: ~3.5 for 1-5 rating scale
 
-        # Training loop
+        # Linear weights: one per feature
+        self.w = np.zeros(self.n_features)  # Shape: (6050,)
+
+        # Latent factors: each feature gets a k-dimensional vector
+        # Initialize small random to break symmetry
+        self.V = np.random.normal(0, 0.01, (self.n_features, self.k))  # Shape: (6050, 10)
+
+        # === TRAINING LOOP ===
         for epoch in range(self.n_epochs):
             for idx in range(n_samples):
-                x = X[idx]
-                target = y[idx]
+                x = X[idx]       # Shape: (6050,) - mostly zeros (sparse!)
+                target = y[idx]  # Scalar: actual rating (e.g., 4.0)
 
-                # Prediction
-                pred = self.predict_instance(x)
+                # === FORWARD PASS ===
+                pred = self.predict_instance(x)  # e.g., pred = 3.7
 
-                # Error
-                err = target - pred
+                # Error: how wrong are we?
+                err = target - pred  # e.g., err = 4.0 - 3.7 = +0.3 (underpredicted)
 
-                # Update global bias
-                self.w0 += self.lr * err
+                # === BACKWARD PASS (SGD Updates) ===
 
-                # Update linear weights
+                # Update global bias: w0 += lr * err
+                # If err > 0, we increase w0 (predictions were too low)
+                self.w0 += self.lr * err  # w0 = 0 + 0.01 * 0.3 = 0.003
+
+                # Update linear weights: w_i += lr * (err * x_i - reg * w_i)
+                # Only non-zero x_i contribute; regularization shrinks weights
                 self.w += self.lr * (err * x - self.reg * self.w)
 
-                # Update factors (using efficient formula)
-                # Precompute sum for each factor
-                sum_vx = np.dot(x, self.V)  # (k,)
+                # Update latent factors (the key FM innovation)
+                # Precompute S_f = sum_j(v_jf * x_j) for each factor f
+                sum_vx = np.dot(x, self.V)  # Shape: (k,) = (10,)
+                # Example: sum_vx = [1.5, 0.6, ...] for k=10
 
                 for i in range(self.n_features):
-                    if x[i] != 0:
+                    if x[i] != 0:  # Only update active features (sparse optimization)
                         for f in range(self.k):
+                            # Gradient: err * x_i * (S_f - v_if * x_i) - reg * v_if
+                            # The (S_f - v_if * x_i) term is "sum over OTHER features"
                             grad = err * (x[i] * sum_vx[f] - self.V[i, f] * x[i]**2) - self.reg * self.V[i, f]
                             self.V[i, f] += self.lr * grad
 
-            # Evaluate
+            # === EPOCH EVALUATION ===
             predictions = np.array([self.predict_instance(X[i]) for i in range(n_samples)])
             rmse = np.sqrt(np.mean((y - predictions)**2))
             print(f"Epoch {epoch+1}/{self.n_epochs}: RMSE = {rmse:.4f}")
+            # Example output: Epoch 1: RMSE = 1.2345, Epoch 50: RMSE = 0.8123
 
     def predict_instance(self, x):
-        """Predict for a single instance"""
-        # Linear term
-        linear = self.w0 + np.dot(x, self.w)
+        """
+        Predict rating for a single feature vector.
 
-        # Interaction term (efficient formula)
+        x: Shape (n_features,), sparse (mostly zeros)
+        Returns: Scalar prediction (e.g., 4.23)
+        """
+        # === LINEAR COMPONENT ===
+        # w0 + sum_i(w_i * x_i)
+        linear = self.w0 + np.dot(x, self.w)
+        # Example: 3.5 + (0.3*1 + 0.5*1 + 0.2*1) = 3.5 + 1.0 = 4.5
+
+        # === INTERACTION COMPONENT (Efficient O(kn) formula) ===
         interaction = 0
         for f in range(self.k):
-            sum_vx = np.dot(x, self.V[:, f])
-            sum_v2x2 = np.dot(x**2, self.V[:, f]**2)
-            interaction += 0.5 * (sum_vx**2 - sum_v2x2)
+            # S_f = sum_i(v_if * x_i)
+            sum_vx = np.dot(x, self.V[:, f])  # Scalar, e.g., 1.5
 
-        return linear + interaction
+            # Diagonal correction: sum_i(v_if^2 * x_i^2)
+            sum_v2x2 = np.dot(x**2, self.V[:, f]**2)  # Scalar, e.g., 0.35
+
+            # Contribution from this latent dimension
+            interaction += 0.5 * (sum_vx**2 - sum_v2x2)
+            # Example: 0.5 * (1.5^2 - 0.35) = 0.5 * (2.25 - 0.35) = 0.5 * 1.9 = 0.95
+
+        return linear + interaction  # 4.5 + 0.95 = 5.45
 
     def predict(self, X):
-        """Predict for multiple instances"""
+        """Predict for multiple instances (batch prediction)"""
         return np.array([self.predict_instance(X[i]) for i in range(X.shape[0])])
 
-# Example usage
+# === EXAMPLE USAGE ===
 if __name__ == "__main__":
-    # Toy dataset: users (one-hot) + items (one-hot) + ratings
-    # 3 users, 3 items
+    # Toy dataset: 3 users, 3 items
     # Feature vector: [user_0, user_1, user_2, item_0, item_1, item_2]
+    #                  <------ users ------>  <------ items ------>
 
     X = np.array([
-        [1, 0, 0, 1, 0, 0],  # User 0, Item 0
-        [1, 0, 0, 0, 1, 0],  # User 0, Item 1
-        [0, 1, 0, 1, 0, 0],  # User 1, Item 0
-        [0, 1, 0, 0, 0, 1],  # User 1, Item 2
-        [0, 0, 1, 0, 1, 0],  # User 2, Item 1
-        [0, 0, 1, 0, 0, 1]   # User 2, Item 2
-    ])
+        [1, 0, 0, 1, 0, 0],  # User 0 rates Item 0 → rating 5.0
+        [1, 0, 0, 0, 1, 0],  # User 0 rates Item 1 → rating 3.0
+        [0, 1, 0, 1, 0, 0],  # User 1 rates Item 0 → rating 4.0
+        [0, 1, 0, 0, 0, 1],  # User 1 rates Item 2 → rating 5.0
+        [0, 0, 1, 0, 1, 0],  # User 2 rates Item 1 → rating 2.0
+        [0, 0, 1, 0, 0, 1]   # User 2 rates Item 2 → rating 4.0
+    ], dtype=np.float32)
 
     y = np.array([5.0, 3.0, 4.0, 5.0, 2.0, 4.0])
 
+    # Train FM with k=5 latent factors
     fm = FactorizationMachine(n_factors=5, learning_rate=0.01, reg=0.01, n_epochs=50)
     fm.fit(X, y)
 
-    # Predict
-    test_x = np.array([1, 0, 0, 0, 0, 1])  # User 0, Item 2
-    print(f"\nPrediction for user 0, item 2: {fm.predict_instance(test_x):.2f}")
+    # Predict: What would User 0 rate Item 2?
+    # (This pair was NOT in training data - true test of generalization!)
+    test_x = np.array([1, 0, 0, 0, 0, 1], dtype=np.float32)  # User 0, Item 2
+    print(f"\nPrediction for User 0, Item 2: {fm.predict_instance(test_x):.2f}")
+    # Expected: ~4.5 (User 0 likes things, Item 2 is well-liked)
 ```
+
+---
+
+### Connection to Next Topic: Why FM Leads to Deep Learning
+
+*Now that you understand FM, you're ready to see its evolution.*
+
+**FM's key insight**: Learn feature interactions via latent factors.
+
+**Limitation**: FM only models **pairwise** interactions. What about:
+- User × Item × Time of day?
+- Genre × Director × Decade?
+
+**Deep Learning solution**: Stack multiple layers to capture **higher-order** interactions.
+
+**Preview of Week 5**:
+- **DeepFM** = FM + deep neural network
+- **Neural CF** = Replace dot product with learned neural network
+- **Wide & Deep** = Memorization (linear) + Generalization (deep)
+
+*Can you see how* FM is a stepping stone to these models? The latent factor idea persists, but with neural networks providing more expressive interaction functions.
 
 ---
 

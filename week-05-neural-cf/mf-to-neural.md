@@ -108,6 +108,80 @@ $$\hat{r}_{ui} = \sum_{f=1}^k u_{uf} \cdot v_{fi}$$
 
 ---
 
+### Concrete Example: A Pattern MF Cannot Capture
+
+*Let me show you a specific user preference that breaks MF.*
+
+**The "Guilty Pleasure" Pattern**:
+
+```
+User Alice's actual preferences:
+- Loves Action movies: ✓
+- Loves Comedy movies: ✓
+- But HATES Action-Comedy hybrids (like "Rush Hour"): ✗
+
+Her logic: "Action movies should be serious. Comedy should be pure comedy."
+```
+
+**What happens with MF?**
+
+MF learns embeddings:
+```
+Alice:  u = [0.8, 0.7]    (positive on both action and comedy dimensions)
+Action: v = [0.9, 0.1]    (high action, low comedy)
+Comedy: v = [0.1, 0.9]    (low action, high comedy)
+Action-Comedy: v = [0.7, 0.7]  (moderate both)
+```
+
+**Predictions**:
+- Alice × Action: $0.8 \times 0.9 + 0.7 \times 0.1 = 0.79$ ✓ (high, correct)
+- Alice × Comedy: $0.8 \times 0.1 + 0.7 \times 0.9 = 0.71$ ✓ (high, correct)
+- Alice × Action-Comedy: $0.8 \times 0.7 + 0.7 \times 0.7 = 1.05$ ✗ (HIGHEST! Wrong!)
+
+**The problem**: MF predicts Alice will love Action-Comedy *most* because dot product is additive!
+
+*Can you see why* linear models can't capture "I like A and B separately, but not together"?
+
+---
+
+### Decision Boundaries: Visualizing the Limitation
+
+*If you're visual, this helps.*
+
+**MF's decision boundary** (who likes what):
+```
+Comedy preference
+      ↑
+      │     Users who        Users who
+      │     like Comedy      like both
+      │     only
+      │─────────────────────────→
+      │     Users who        Users who
+      │     like neither     like Action
+      │                      only
+      └────────────────────────→ Action preference
+```
+
+**MF draws a straight line** to separate "like" from "dislike."
+
+**But Alice's preference is**:
+```
+Comedy preference
+      ↑
+      │  ✓              ✗
+      │  (pure comedy)  (action-comedy)
+      │
+      │  ✗              ✓
+      │  (neither)      (pure action)
+      └────────────────────────→ Action preference
+```
+
+This is an **XOR pattern** — impossible to separate with a line!
+
+**Neural networks can draw curved boundaries** — that's their superpower.
+
+---
+
 ### Example: The Cold-Start Problem
 
 **Scenario**: Predict rating for (User A, Item X)
@@ -147,6 +221,7 @@ $$\hat{r}_{ui} = \mathbf{u}_u^T \mathbf{v}_i$$
 - Conjunctions: "I like action AND comedy together"
 - Disjunctions: "I like either action OR romance"
 - Complex patterns: "I like action if by director X, else prefer drama"
+- XOR patterns: "I like A or B, but not both"
 
 **Universal Approximation Theorem**: A neural network with non-linear activations can approximate any function!
 
@@ -253,7 +328,9 @@ def learned_similarity(u, v):
 
 ---
 
-## When MF is Sufficient
+## When MF is Sufficient (And When Neural Networks Are Overkill!)
+
+*This is important: Neural isn't always better.*
 
 ### MF Works Well When:
 
@@ -267,6 +344,34 @@ def learned_similarity(u, v):
 - Matrix Factorization (ensemble of MF variants) won
 - Deep learning wasn't mature yet
 - Data was dense enough for MF to excel
+
+---
+
+### The Dirty Secret: MF Often Wins in Practice
+
+*Let me share something researchers don't always advertise.*
+
+**A 2019 study** (Dacrema et al., "Are We Really Making Much Progress?") found:
+- Many neural recommendation papers compared against **poorly tuned MF baselines**
+- When MF is properly tuned (right k, regularization, learning rate), the gap shrinks dramatically
+- On some datasets, **well-tuned MF beats untuned deep learning**
+
+**When to use MF over Neural**:
+
+| Situation | Choose MF | Choose Neural |
+|-----------|-----------|---------------|
+| Dataset size | < 1M interactions | > 10M interactions |
+| Latency requirement | < 5ms | < 50ms acceptable |
+| Team ML expertise | Limited | Strong |
+| Need explainability | Yes ("these factors...") | No (black box OK) |
+| Available compute | CPU only | GPU available |
+| Side features (text, images) | Not available | Available |
+
+**The rule of thumb**: Start with MF. Only move to neural if:
+1. You have lots of data (>10M interactions)
+2. You have GPU infrastructure
+3. You have complex patterns MF can't capture
+4. You've already tuned MF well and hit a ceiling
 
 ---
 

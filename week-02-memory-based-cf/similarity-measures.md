@@ -21,6 +21,93 @@
 
 ---
 
+## Deriving Similarity from First Principles
+
+*Before I show you the formulas, let's derive them from intuition.*
+
+### Step 1: The Naive Approach (Sum of Ratings)
+
+**Idea**: Users who rated items similarly should have similar rating sums.
+
+$$\text{similarity}(A, B) = \sum_{i \in \text{co-rated}} r_{Ai} + r_{Bi}$$
+
+**What goes wrong?**
+
+```
+User A: rated 1000 items → huge sum
+User B: rated 10 items → small sum
+```
+
+Even if they have identical taste, A looks "more similar" to everyone just because they rated more items.
+
+*We need to account for magnitude.*
+
+---
+
+### Step 2: Normalize by Magnitude (Euclidean Distance → Cosine)
+
+**Idea**: Divide by how much they rated overall.
+
+This leads us to **cosine similarity**: measure the *angle* between rating vectors, not their length.
+
+$$\text{cosine}(A, B) = \frac{\mathbf{r}_A \cdot \mathbf{r}_B}{||\mathbf{r}_A|| \cdot ||\mathbf{r}_B||}$$
+
+**What goes wrong?**
+
+```
+User A: [5, 5, 4, 5] → always rates high
+User B: [2, 2, 1, 2] → always rates low
+```
+
+Cosine says these are very similar (pointing in the same direction), but:
+- A rating of 2 from User B means "pretty good for me"
+- A rating of 2 from User A means "terrible, I hate it"
+
+*We need to account for different rating scales.*
+
+---
+
+### Step 3: Center by User Mean (Pearson Correlation)
+
+**Idea**: Subtract each user's mean before comparing.
+
+$$\text{Pearson}(A, B) = \frac{\sum (r_{Ai} - \bar{r}_A)(r_{Bi} - \bar{r}_B)}{\sqrt{\sum(r_{Ai} - \bar{r}_A)^2} \cdot \sqrt{\sum(r_{Bi} - \bar{r}_B)^2}}$$
+
+Now:
+- "Above my average" = I like it
+- "Below my average" = I don't like it
+
+Both users speaking the same language!
+
+*Can you see how* each step fixed a problem with the previous approach?
+
+---
+
+## The Decision Tree: Which Metric Should I Use?
+
+```
+                 Start Here
+                     │
+         ┌───────────┴───────────┐
+         │                       │
+    Binary data?            Explicit ratings?
+    (click/no click)        (1-5 stars)
+         │                       │
+         ↓                       ↓
+      Jaccard              Different rating scales?
+                           (some users harsh, some generous)
+                                 │
+                    ┌────────────┴────────────┐
+                    │                         │
+                   Yes                        No
+                    │                         │
+                    ↓                         ↓
+                Pearson                    Cosine
+         (mean-centered)            (good enough)
+```
+
+---
+
 ## Similarity Metrics Comparison
 
 | Metric | Best For | Handles Rating Scale? | Sparsity Sensitive? | Complexity |
@@ -57,7 +144,45 @@ $$\text{cosine}(u, v) = \frac{\mathbf{r}_u \cdot \mathbf{r}_v}{||\mathbf{r}_u|| 
 - Explicit ratings with different user scales
 - Alice rates 4-5, Bob rates 1-2 (same preferences, different scales)
 
-### Example
+---
+
+### Failure Case: The Rating Scale Problem
+
+*Let me show you exactly when cosine fails.*
+
+**Scenario**: Two users with identical taste but different rating habits.
+
+```
+         Movie1  Movie2  Movie3  Movie4
+Alice      5       4       5       4     (generous rater, avg = 4.5)
+Bob        2       1       2       1     (harsh critic, avg = 1.5)
+```
+
+**Cosine calculation**:
+$$\text{cosine} = \frac{5 \cdot 2 + 4 \cdot 1 + 5 \cdot 2 + 4 \cdot 1}{\sqrt{5^2+4^2+5^2+4^2} \cdot \sqrt{2^2+1^2+2^2+1^2}}$$
+$$= \frac{10+4+10+4}{\sqrt{82} \cdot \sqrt{10}} = \frac{28}{\sqrt{820}} \approx 0.977$$
+
+**Result**: 0.977 similarity — pretty good!
+
+**But wait, let's add a third user**:
+
+```
+         Movie1  Movie2  Movie3  Movie4
+Carol      5       5       5       5     (loves everything)
+```
+
+**Cosine(Alice, Carol)**:
+$$= \frac{5 \cdot 5 + 4 \cdot 5 + 5 \cdot 5 + 4 \cdot 5}{\sqrt{82} \cdot \sqrt{100}} = \frac{90}{\sqrt{8200}} \approx 0.994$$
+
+**The problem**: Carol (who rates everything 5 stars) appears MORE similar to Alice than Bob!
+
+*Cosine can't distinguish "loves everything" from "has the same relative preferences."*
+
+**When to use Pearson instead**: If users have different rating scales and you care about *relative* preferences.
+
+---
+
+### Example (with annotations)
 
 ```python
 import numpy as np
@@ -68,27 +193,35 @@ def cosine_similarity(user1, user2):
 
     Args:
         user1, user2: Rating vectors (numpy arrays)
+                      Example: [5, 4, 0, 3, 0, 5] where 0 = not rated
 
     Returns:
-        Similarity score [0, 1]
+        Similarity score [0, 1] (higher = more similar)
     """
-    # Only consider co-rated items
+    # Only consider co-rated items (both users rated)
+    # Example: user1=[5,4,0,3], user2=[4,0,3,2]
+    #          mask = [T,F,F,T] → only indices 0 and 3
     mask = (user1 > 0) & (user2 > 0)
 
     if mask.sum() == 0:
-        return 0  # No overlap
+        return 0  # No overlap → can't compute similarity
 
-    u1 = user1[mask]
-    u2 = user2[mask]
+    # Extract co-rated values
+    u1 = user1[mask]  # e.g., [5, 3]
+    u2 = user2[mask]  # e.g., [4, 2]
 
-    dot_product = np.dot(u1, u2)
-    norm1 = np.linalg.norm(u1)
-    norm2 = np.linalg.norm(u2)
+    # Dot product: sum of element-wise products
+    dot_product = np.dot(u1, u2)  # 5*4 + 3*2 = 26
+
+    # Magnitudes (L2 norms)
+    norm1 = np.linalg.norm(u1)  # sqrt(25 + 9) = sqrt(34) ≈ 5.83
+    norm2 = np.linalg.norm(u2)  # sqrt(16 + 4) = sqrt(20) ≈ 4.47
 
     if norm1 == 0 or norm2 == 0:
-        return 0
+        return 0  # Can't divide by zero
 
-    return dot_product / (norm1 * norm2)
+    # Final similarity: cosine of angle between vectors
+    return dot_product / (norm1 * norm2)  # 26 / (5.83 * 4.47) ≈ 0.998
 
 # Example
 user_a = np.array([5, 4, 0, 3, 0, 5])  # 0 = not rated
@@ -96,7 +229,7 @@ user_b = np.array([4, 0, 3, 2, 5, 0])
 
 sim = cosine_similarity(user_a, user_b)
 print(f"Cosine similarity: {sim:.3f}")
-# Output: Cosine similarity: 0.998 (very similar)
+# Output: Cosine similarity: 0.998 (very similar based on co-rated items 0 and 3)
 ```
 
 ### Properties
@@ -284,16 +417,55 @@ where:
 - $A$ = set of items user A interacted with
 - $B$ = set of items user B interacted with
 
+### The Intuition: Overlap Divided by Total
+
+*Think of it as:* "What fraction of all items either user touched were touched by BOTH?"
+
+```
+User A's items:  {🎬, 📚, 🎮, 🎧}
+User B's items:  {📚, 🎮, 🏀, 🎸}
+
+Intersection (both):  {📚, 🎮}         → 2 items
+Union (either):       {🎬, 📚, 🎮, 🎧, 🏀, 🎸}  → 6 items
+
+Jaccard = 2/6 = 0.33
+```
+
 ### When to Use
 
 ✅ **Perfect for**:
-- **Binary implicit feedback** (clicked/not clicked)
+- **Binary implicit feedback** (clicked/not clicked, bought/not bought)
 - Sets (no rating magnitude)
 - Simple and interpretable
+- Robust to sparse data (doesn't need actual values)
 
 ❌ **Not for**:
-- Explicit ratings (ignores magnitudes)
+- Explicit ratings (ignores magnitudes — a 5-star and 1-star both count as "interacted")
 - When rating values matter
+
+---
+
+### Failure Case: The Popularity Bias
+
+*Let me show you when Jaccard misleads.*
+
+**Scenario**: Two users who both bought extremely popular items.
+
+```
+Popular items everyone buys: {iPhone, Milk, Amazon Prime}
+
+User A: {iPhone, Milk, Amazon Prime, Rare Jazz Album, Vintage Watch}
+User B: {iPhone, Milk, Amazon Prime, Gaming Mouse, Basketball}
+
+Intersection: {iPhone, Milk, Amazon Prime} → 3 items
+Union: 8 items
+
+Jaccard = 3/8 = 0.375
+```
+
+**The problem**: This similarity is mostly driven by popular items that EVERYONE buys. The users actually have very different tastes (jazz/vintage vs gaming/sports).
+
+**Solution**: Use **TF-IDF weighting** or remove popular items before computing Jaccard.
 
 ### Example
 

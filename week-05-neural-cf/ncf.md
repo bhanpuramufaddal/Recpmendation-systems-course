@@ -96,7 +96,30 @@ where:
 - $\sigma(\cdot)$ = sigmoid activation function: $\sigma(x) = \frac{1}{1 + e^{-x}}$
 - $k$ = embedding dimension
 
-**Note**: If $\mathbf{h} = \mathbf{1}$ (all ones), this reduces to standard matrix factorization.
+---
+
+#### The Key Insight: Connecting GMF to MF
+
+*Let me show you exactly how GMF relates to classical MF.*
+
+**Standard MF prediction**:
+$$\hat{y}_{ui}^{MF} = \mathbf{p}_u^T \mathbf{q}_i = \sum_{j=1}^k p_{uj} \cdot q_{ij}$$
+
+**GMF prediction** (expanded):
+$$\hat{y}_{ui}^{GMF} = \sigma\left(\sum_{j=1}^k h_j \cdot (p_{uj} \cdot q_{ij})\right) = \sigma\left(\sum_{j=1}^k h_j \cdot p_{uj} \cdot q_{ij}\right)$$
+
+**If $\mathbf{h} = [1, 1, \ldots, 1]$ (all ones) and we remove sigmoid**:
+$$\hat{y}_{ui}^{GMF} = \sum_{j=1}^k 1 \cdot p_{uj} \cdot q_{ij} = \mathbf{p}_u^T \mathbf{q}_i$$
+
+*This IS matrix factorization!*
+
+**What does $\mathbf{h}$ add?**
+
+$\mathbf{h}$ is a **learnable importance vector**. It says:
+- "Dimension 1 matters a lot for prediction" (high $h_1$)
+- "Dimension 5 is less important" (low $h_5$)
+
+In MF, all dimensions contribute equally. In GMF, the model learns which dimensions matter most.
 
 ---
 
@@ -127,6 +150,48 @@ $$\mathbf{h}_l = \text{ReLU}(\mathbf{W}_l \mathbf{h}_{l-1} + \mathbf{b}_l), \qua
 $$\hat{y}_{ui}^{MLP} = \sigma(\mathbf{w}^T \mathbf{h}_L)$$
 
 **Capacity**: Can learn **arbitrary non-linear functions**.
+
+---
+
+#### Layer Sizing Intuition: The Funnel Architecture
+
+*Why do layer sizes typically decrease? (e.g., 128 → 64 → 32 → 16)*
+
+**The Funnel Metaphor**:
+
+```
+Layer 0: [64-dim user] + [64-dim item] = 128 dimensions
+         "Everything about user and item"
+              ↓
+Layer 1: 64 dimensions
+         "The most important interaction patterns"
+              ↓
+Layer 2: 32 dimensions
+         "Compressed, essential features"
+              ↓
+Layer 3: 16 dimensions
+         "The core signal: will user like item?"
+              ↓
+Output: 1 dimension (probability)
+```
+
+**Why this works**:
+
+1. **Information bottleneck**: Force the network to identify what matters
+2. **Regularization**: Fewer parameters in later layers → less overfitting
+3. **Hierarchical abstraction**: Early layers: raw patterns; late layers: decision-relevant features
+
+**Alternative: Tower (constant width)**
+
+```
+128 → 128 → 128 → 128 → 1
+```
+
+This can work too, but:
+- More parameters (may overfit on sparse data)
+- May not force compression of information
+
+**Rule of thumb**: Start with funnel. If underfitting (training loss high), try wider layers.
 
 ---
 
@@ -346,6 +411,33 @@ train_ncf(model, train_loader, val_loader, epochs=20, lr=0.001)
 
 ---
 
+### Why Do We Need Negative Sampling?
+
+*Let me show you the problem concretely.*
+
+**Scenario**: Netflix with 10,000 movies. User Alice has watched 50 movies.
+
+**The data we have**:
+- 50 positive examples: (Alice, Movie_1) = 1, (Alice, Movie_2) = 1, ...
+- 9,950 "negatives": All movies Alice hasn't watched
+
+**Naive approach**: Train on all 10,000 pairs.
+
+**Problems**:
+
+1. **Extreme imbalance**: 50 positives vs 9,950 negatives (99.5% negative!)
+   - Model learns to always predict 0 (gets 99.5% accuracy!)
+   - Useless for recommendation
+
+2. **False negatives**: Did Alice not watch "Inception" because she wouldn't like it, or because she hasn't discovered it yet?
+   - Many "negatives" are actually potential positives
+
+3. **Computational cost**: 10,000 pairs per user × 1M users = 10B training examples
+
+**Solution**: Sample a small number of random negatives per positive.
+
+---
+
 ### Sampling Strategy
 
 **For each positive (user, item) pair**:
@@ -354,6 +446,26 @@ train_ncf(model, train_loader, val_loader, epochs=20, lr=0.001)
 3. Train to distinguish positive from negative
 
 **Typical $k$**: 4-10 negatives per positive
+
+---
+
+### The Intuition: Contrastive Learning
+
+*Think of it like a multiple choice test.*
+
+**Question**: Which movie did Alice actually watch?
+
+```
+A. Inception (positive - she watched it)    ← Correct answer
+B. Random Movie #4521 (negative - didn't watch)
+C. Random Movie #892 (negative)
+D. Random Movie #7723 (negative)
+E. Random Movie #156 (negative)
+```
+
+**Training objective**: Make the model rank A above B, C, D, E.
+
+If the model can consistently identify the real positive among random negatives, it has learned something useful!
 
 ---
 

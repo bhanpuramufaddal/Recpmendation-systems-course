@@ -88,6 +88,66 @@ where $\mathbf{e}_i \in \mathbb{R}^d$ is embedding of item $i$.
 2. **Compute attention scores**:
    $$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d}}\right)V$$
 
+---
+
+#### Step-by-Step Example: Self-Attention with 3 Items
+
+*Let me walk through the computation with actual numbers.*
+
+**User's sequence**: [Laptop, Mouse, Keyboard]
+
+**Item embeddings** (d=4 for simplicity):
+```
+e_laptop   = [0.5, 0.8, 0.1, 0.3]
+e_mouse    = [0.6, 0.7, 0.2, 0.4]
+e_keyboard = [0.4, 0.9, 0.1, 0.2]
+```
+
+**Step 1: Compute Q, K, V** (assume $W^Q, W^K, W^V$ are identity for simplicity)
+
+For this example, let's say Q = K = V = E (the embeddings themselves).
+
+**Step 2: Compute $QK^T$** (similarity matrix)
+
+Each entry $(i,j)$ = dot product of item $i$'s query with item $j$'s key.
+
+```
+                    Key:
+                 Laptop  Mouse  Keyboard
+Query: Laptop   [ 0.99   0.97    0.91  ]
+       Mouse    [ 0.97   1.05    0.93  ]
+       Keyboard [ 0.91   0.93    0.99  ]
+```
+
+*Reading row 1*: Laptop is most similar to itself (0.99), then Mouse (0.97), then Keyboard (0.91).
+
+**Step 3: Scale by $\sqrt{d} = \sqrt{4} = 2$**
+
+```
+Scaled:         [ 0.495  0.485  0.455 ]
+                [ 0.485  0.525  0.465 ]
+                [ 0.455  0.465  0.495 ]
+```
+
+**Step 4: Softmax** (each row sums to 1)
+
+```
+Attention Weights:
+                 Laptop  Mouse  Keyboard
+       Laptop   [ 0.35   0.34    0.31  ]  ← Laptop attends to all items
+       Mouse    [ 0.33   0.36    0.31  ]  ← Mouse attends to all items
+       Keyboard [ 0.32   0.33    0.35  ]  ← Keyboard attends to all items
+```
+
+**Step 5: Multiply by V** (weighted sum of value vectors)
+
+For Laptop's new representation:
+$$\mathbf{h}_{laptop} = 0.35 \cdot \mathbf{v}_{laptop} + 0.34 \cdot \mathbf{v}_{mouse} + 0.31 \cdot \mathbf{v}_{keyboard}$$
+
+*The new representation incorporates information from ALL items in the sequence!*
+
+---
+
 where:
 - $Q \in \mathbb{R}^{t \times d}$ = query matrix (transformed input embeddings)
 - $K \in \mathbb{R}^{t \times d}$ = key matrix (transformed input embeddings)
@@ -181,6 +241,43 @@ where $\mathbf{p}_i \in \mathbb{R}^d$ is learned position embedding for position
 $$\text{mask}[i, j] = \begin{cases} 0 & \text{if } j \leq i \\ -\infty & \text{if } j > i \end{cases}$$
 
 This prevents "cheating" by looking at future items.
+
+---
+
+#### Visualizing the Causal Mask
+
+*Let me show you exactly what the mask looks like.*
+
+**Sequence**: [Item1, Item2, Item3, Item4]
+
+**Causal mask matrix** (what each position can attend to):
+
+```
+              Keys (what we attend TO)
+           Item1  Item2  Item3  Item4
+Query:
+Item1      [ ✓      ✗      ✗      ✗  ]   ← Can only see itself
+Item2      [ ✓      ✓      ✗      ✗  ]   ← Can see Item1, Item2
+Item3      [ ✓      ✓      ✓      ✗  ]   ← Can see Item1-3
+Item4      [ ✓      ✓      ✓      ✓  ]   ← Can see everything
+```
+
+**As a numerical matrix** (added to attention scores before softmax):
+
+```
+           Item1   Item2   Item3   Item4
+Item1    [   0      -∞      -∞      -∞   ]
+Item2    [   0       0      -∞      -∞   ]
+Item3    [   0       0       0      -∞   ]
+Item4    [   0       0       0       0   ]
+```
+
+**After adding mask and applying softmax**:
+- Position 1: Can only attend to position 1 → attention = [1.0, 0, 0, 0]
+- Position 2: Can attend to positions 1-2 → attention = [0.4, 0.6, 0, 0] (learned)
+- Position 4: Can attend to all → attention = [0.2, 0.3, 0.1, 0.4] (learned)
+
+**Why $-\infty$?** After softmax, $e^{-\infty} = 0$, so those positions get zero weight.
 
 ---
 
@@ -519,6 +616,56 @@ def mask_sequence(seq, mask_prob=0.15):
 | **Accuracy** | Good | Better |
 | **Inference** | Direct | Needs masking strategy |
 | **Use case** | Real-time, large-scale | Offline batch recommendation |
+
+---
+
+### Decision Framework: SASRec vs BERT4Rec
+
+*Which should you choose? Here's a practical guide.*
+
+```
+                         Start Here
+                             │
+                What's your use case?
+                             │
+            ┌────────────────┴────────────────┐
+            │                                  │
+       Real-time                          Batch/Offline
+    (recommendations                    (daily email,
+     as user browses)                   weekly digest)
+            │                                  │
+            ↓                                  ↓
+         SASRec                            BERT4Rec
+    (can predict next                   (can look at
+     item immediately)                   full context)
+```
+
+**Choose SASRec when:**
+
+✅ **Real-time recommendations**: User adds item to cart → instantly recommend
+✅ **Streaming data**: Continuously updating as user browses
+✅ **Inference latency matters**: <50ms response time needed
+✅ **Simpler deployment**: Causal = autoregressive = straightforward inference
+
+**Choose BERT4Rec when:**
+
+✅ **Batch recommendations**: Generate candidates overnight, serve all day
+✅ **Maximum accuracy matters**: Can afford training time for +2% improvement
+✅ **Rich context available**: Want to leverage future context for predictions
+✅ **Fill-in-the-blank scenarios**: Impute missing items in a sequence
+
+**The Practical Reality**:
+
+| Scenario | Best Choice | Why |
+|----------|-------------|-----|
+| E-commerce live session | SASRec | Speed matters |
+| Netflix homepage (daily) | BERT4Rec | Accuracy matters, computed overnight |
+| YouTube "Up Next" | SASRec | Real-time |
+| Spotify Weekly Discover | BERT4Rec | Weekly batch |
+| News recommendation | SASRec | Very fast-changing |
+| Course recommendation | BERT4Rec | User plans slowly |
+
+*When in doubt*: Start with SASRec (simpler), upgrade to BERT4Rec if you hit accuracy ceiling.
 
 ---
 
