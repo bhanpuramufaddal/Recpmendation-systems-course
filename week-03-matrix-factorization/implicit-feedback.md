@@ -1,5 +1,69 @@
 # Week 3: Matrix Factorization - Implicit Feedback
 
+## The Problem: Why Can't We Treat Missing as Negative?
+
+*Before we dive into the algorithms, let me show you why implicit feedback is fundamentally different from explicit ratings.*
+
+**The Setup**: You're building a music recommendation system. You have data on which songs users have played.
+
+| User | Song A | Song B | Song C | Song D | Song E |
+|------|--------|--------|--------|--------|--------|
+| Alice | 5 plays | 0 plays | 12 plays | 0 plays | 0 plays |
+| Bob | 0 plays | 8 plays | 0 plays | 0 plays | 3 plays |
+| Carol | 0 plays | 0 plays | 0 plays | 7 plays | 0 plays |
+
+**The naive approach**: "Let's treat 0 plays as 'dislikes' and run standard matrix factorization!"
+
+*But wait... think about this carefully.*
+
+---
+
+### The Concrete Example: What Goes Wrong
+
+**Let's calculate what happens if we naively treat unobserved = 0.**
+
+Suppose we have 100,000 songs in our catalog. Alice has played 50 songs total.
+
+**If we treat missing as negative:**
+- Positive examples: 50 songs Alice played
+- Negative examples: 99,950 songs Alice "didn't play"
+
+**Training signal:**
+- For every 1 positive, we have ~2000 negatives
+- The model learns: "To minimize error, predict 0 for everything!"
+- Why? Because 99.95% of the training signal says "predict 0"
+
+**The math**:
+$$\text{Loss} = \sum_{\text{positives}} (1 - \hat{y})^2 + \sum_{\text{negatives}} (0 - \hat{y})^2$$
+
+If we predict $\hat{y} = 0$ for everything:
+$$\text{Loss} = 50 \times (1-0)^2 + 99950 \times (0-0)^2 = 50$$
+
+If we predict $\hat{y} = 0.1$ for everything:
+$$\text{Loss} = 50 \times (1-0.1)^2 + 99950 \times (0-0.1)^2 = 50 \times 0.81 + 99950 \times 0.01 = 40.5 + 999.5 = 1040$$
+
+*See the problem?* Predicting zeros minimizes loss even though it's useless!
+
+---
+
+### The Key Insight: Absence of Evidence ≠ Evidence of Absence
+
+*Why didn't Alice play Song D?*
+
+**Possibility 1**: Alice doesn't know Song D exists (no exposure)
+**Possibility 2**: Alice saw Song D but wasn't in the mood (context)
+**Possibility 3**: Alice doesn't like that genre (true negative)
+**Possibility 4**: Song D wasn't available in her region (availability)
+
+*We simply don't know which one!* Treating all zeros as negatives conflates these very different scenarios.
+
+**Explicit feedback**: If Alice rated Song D as 1 star, we KNOW she dislikes it.
+**Implicit feedback**: If Alice has 0 plays for Song D, we know... nothing definitive.
+
+*This is the fundamental challenge we must solve.*
+
+---
+
 ## Overview
 
 Most real-world recommendation systems don't have explicit ratings. Instead, they observe **implicit feedback**: clicks, views, purchases, plays, time spent. This document covers how to adapt matrix factorization for implicit feedback data, focusing on two dominant approaches:
@@ -18,6 +82,9 @@ By the end of this section, you will:
 - Understand the one-class collaborative filtering problem
 - Implement WRMF for confidence-weighted recommendations
 - Master BPR for pairwise ranking
+- **Derive why the confidence weighting makes sense**
+- **Understand why pairwise ranking is natural for implicit data**
+- **Know the computational tricks that make these methods scale**
 - Apply these techniques to real-world datasets
 
 ---
@@ -93,6 +160,8 @@ $$\min_{U,V} \sum_{(u,i) \in \text{observed}} (r_{ui} - \mathbf{u}_u^T \mathbf{v
 
 ### Key Idea: Confidence Weights
 
+*The brilliant insight: instead of treating all zeros equally, assign different confidence levels.*
+
 For each user-item pair $(u, i)$, define:
 
 1. **Preference** $p_{ui}$:
@@ -105,10 +174,72 @@ where:
 - $y_{ui}$: Number of interactions (plays, clicks, views)
 - $\alpha$: Confidence scaling factor (hyperparameter, typically 40)
 
-**Interpretation**:
-- $p_{ui} = 1, c_{ui} = 41$: User played song 1 time → confident positive
-- $p_{ui} = 1, c_{ui} = 401$: User played song 10 times → very confident positive
-- $p_{ui} = 0, c_{ui} = 1$: No interaction → low confidence negative
+---
+
+### The Intuition: "More Plays = More Sure"
+
+*Let me walk you through the confidence function step by step.*
+
+**The function**: $c_{ui} = 1 + \alpha \cdot y_{ui}$
+
+*What does each part mean?*
+
+**The "1"** (baseline confidence):
+- Even for items with $y_{ui} = 0$, we have $c_{ui} = 1$
+- *Why not zero?* Because we still want to push unobserved items toward 0, just gently
+- The baseline says: "I have *some* belief that unobserved items might not be preferred"
+
+**The "$\alpha \cdot y_{ui}$"** (interaction boost):
+- More interactions → higher confidence
+- If Alice played a song 10 times, we're MORE SURE she likes it than if she played it once
+- $\alpha$ controls how much more sure we are
+
+---
+
+### Numerical Example: Different Confidence Levels
+
+*Let's make this concrete with $\alpha = 40$ (the typical value).*
+
+| Scenario | $y_{ui}$ | $c_{ui} = 1 + 40 \cdot y_{ui}$ | Interpretation |
+|----------|----------|--------------------------------|----------------|
+| Never played | 0 | 1 | "Weak belief: maybe doesn't like" |
+| Played once | 1 | 41 | "Pretty confident: likes this" |
+| Played 5 times | 5 | 201 | "Very confident: really likes this" |
+| Played 10 times | 10 | 401 | "Extremely confident: loves this" |
+| Played 100 times | 100 | 4001 | "Near-certain: this is a favorite" |
+
+*Now think about what this means for training.*
+
+**When we make a prediction error on a 10-play song**:
+- The error contributes 401× more to the loss than an error on an unobserved song
+- The model REALLY wants to get this prediction right
+- It will adjust the user and item vectors significantly
+
+**When we make a prediction error on an unobserved song**:
+- The error contributes only 1× (baseline) to the loss
+- The model will gently push the prediction toward 0
+- But it won't overfit to this weak signal
+
+---
+
+### Visualizing High vs Low Confidence
+
+*Think of confidence as the "volume" of a training example's voice.*
+
+```
+Confidence Level:     LOW (c=1)          HIGH (c=401)
+                     ─────────           ─────────────
+
+Training signal:     (whisper)           (SHOUTING)
+                     "maybe zero..."     "DEFINITELY ONE!"
+
+Effect on gradient:  tiny nudge          big push
+
+What happens if      "oh well, I         "MUST FIX THIS!
+model is wrong:      might be wrong"     ADJUST VECTORS!"
+```
+
+*This is why WRMF works:* The model pays attention to what it's confident about (actual interactions) while maintaining a gentle prior that unobserved items are probably not preferred.
 
 ---
 
@@ -148,6 +279,115 @@ where:
 **Sparse trick**:
 - Most $c_{ui} = 1$ (no interaction)
 - Only compute explicitly for $c_{ui} > 1$ (interactions)
+
+---
+
+### The ALS Sparse Trick: Why $V^T(C-I)V$ Works
+
+*This is the computational magic that makes WRMF practical. Let's derive it step by step.*
+
+**The Problem**:
+
+For each user $u$, we need to compute:
+$$V C^u V^T$$
+
+where $C^u$ is a diagonal $|I| \times |I|$ matrix with $c_{ui}$ on the diagonal.
+
+**Naive complexity**: $O(k^2 |I|)$ per user, where $|I|$ might be millions of items!
+
+*But here's the key observation...*
+
+---
+
+**Step 1: Decompose $C^u$**
+
+Since $c_{ui} = 1 + \alpha \cdot y_{ui}$, and most $y_{ui} = 0$:
+
+$$C^u = I + (C^u - I)$$
+
+where:
+- $I$: Identity matrix (accounts for the baseline confidence of 1)
+- $(C^u - I)$: A **sparse** matrix with $\alpha \cdot y_{ui}$ only for observed items
+
+*Most entries of $(C^u - I)$ are zero!* Only $|I_u|$ entries are non-zero, where $I_u$ = items user $u$ interacted with.
+
+---
+
+**Step 2: Expand $V C^u V^T$**
+
+$$V C^u V^T = V (I + (C^u - I)) V^T = V I V^T + V (C^u - I) V^T$$
+
+$$= V V^T + V (C^u - I) V^T$$
+
+**Key insight**:
+- $V V^T$ is a $k \times k$ matrix that's the **same for all users**! Precompute once.
+- $V (C^u - I) V^T$ is **sparse** - only involves items user $u$ interacted with.
+
+---
+
+**Step 3: Compute the Sparse Part Efficiently**
+
+Let $I_u = \{i : y_{ui} > 0\}$ be the set of items user $u$ interacted with.
+
+$$V (C^u - I) V^T = \sum_{i \in I_u} (c_{ui} - 1) \mathbf{v}_i \mathbf{v}_i^T$$
+
+*This is a sum of $|I_u|$ rank-1 matrices!*
+
+**Computation**:
+- For each item $i$ that user $u$ interacted with:
+  - Look up $\mathbf{v}_i$ (the item's $k$-dimensional vector)
+  - Compute the outer product $\mathbf{v}_i \mathbf{v}_i^T$ (a $k \times k$ matrix)
+  - Multiply by $(c_{ui} - 1)$
+  - Add to the running sum
+
+---
+
+**Step 4: Final Complexity Analysis**
+
+**For the user update:**
+
+1. **Precompute $VV^T$**: $O(k^2 |I|)$ - done once, shared across all users
+2. **Per-user sparse part**: $O(k^2 |I_u|)$ - only for items user $u$ interacted with
+3. **Matrix inversion**: $O(k^3)$ - for the $k \times k$ matrix
+4. **Matrix-vector multiply**: $O(k^2)$
+
+**Total per user**: $O(k^2 |I_u| + k^3)$
+
+**Compare to naive**: $O(k^2 |I|)$
+
+**Savings**: $\frac{|I|}{|I_u|}$ = typical user interaction ratio
+
+*For a catalog of 10 million items and a user who interacted with 1000:*
+- Naive: 10,000,000 operations
+- Sparse trick: 1,000 operations
+- **10,000× speedup!**
+
+---
+
+**The Complete Algorithm (Pseudocode)**:
+
+```python
+# Precompute VV^T (done once)
+VtV = V @ V.T  # k x k matrix
+
+for each user u:
+    # Start with precomputed VV^T
+    A = VtV.copy()
+
+    # Add sparse part for items user interacted with
+    for i in items_user_u_interacted_with:
+        c_diff = c[u, i] - 1  # This is alpha * y_ui
+        A += c_diff * np.outer(V[:, i], V[:, i])
+
+    # Add regularization
+    A += lambda * I
+
+    # Compute right-hand side (also sparse)
+    b = V @ (C[u, :] * p[u, :])  # Also sparse!
+
+    # Solve the linear system
+    u[u] = solve(A, b)
+```
 
 ---
 
@@ -320,6 +560,135 @@ $$i >_u j$$
 where:
 - $i \in I_u^+$: Items user $u$ interacted with
 - $j \in I \setminus I_u^+$: Items user $u$ didn't interact with
+
+---
+
+### The Bayesian Perspective: Where BPR Comes From
+
+*Let me derive BPR from first principles so you understand why pairwise ranking makes sense.*
+
+**Step 1: The Bayesian Setup**
+
+We want to find the best parameters $\Theta$ (user and item factors) given the observed data $D_S$:
+
+$$p(\Theta | D_S) \propto p(D_S | \Theta) \cdot p(\Theta)$$
+
+where:
+- $p(D_S | \Theta)$: Likelihood of observed data given parameters
+- $p(\Theta)$: Prior on parameters (regularization!)
+
+---
+
+**Step 2: What Is Our "Observed Data"?**
+
+*This is the key insight.*
+
+For implicit feedback, what do we actually observe? Not ratings, but **relative preferences**.
+
+If Alice clicked on item $i$ but not item $j$, we can reasonably assume:
+$$\text{Alice prefers } i \text{ over } j$$
+
+We don't know how MUCH Alice likes $i$, but we know she prefers it to $j$.
+
+**The observed data $D_S$:**
+$$D_S = \{(u, i, j) : i \in I_u^+, j \notin I_u^+\}$$
+
+All triples where user $u$ interacted with item $i$ but not with item $j$.
+
+---
+
+**Step 3: The Likelihood Function**
+
+For each triple $(u, i, j)$, we model the probability that user $u$ prefers $i$ over $j$:
+
+$$p(i >_u j | \Theta) = \sigma(\hat{x}_{uij})$$
+
+where:
+- $\hat{x}_{uij} = \hat{r}_{ui} - \hat{r}_{uj}$: Difference in predicted scores
+- $\sigma(x) = \frac{1}{1 + e^{-x}}$: Sigmoid function
+
+*Why sigmoid?* It maps any real number to a probability in (0, 1).
+
+**Assuming independence across triples:**
+
+$$p(D_S | \Theta) = \prod_{(u,i,j) \in D_S} \sigma(\hat{x}_{uij})$$
+
+---
+
+**Step 4: The Log-Likelihood**
+
+Taking the log (easier to optimize):
+
+$$\ln p(D_S | \Theta) = \sum_{(u,i,j) \in D_S} \ln \sigma(\hat{x}_{uij})$$
+
+---
+
+**Step 5: Adding the Prior (Regularization)**
+
+We use a Gaussian prior on the parameters:
+
+$$p(\Theta) \propto \exp\left(-\frac{\lambda}{2} \|\Theta\|^2\right)$$
+
+Log-prior:
+
+$$\ln p(\Theta) = -\frac{\lambda}{2} \|\Theta\|^2 + \text{const}$$
+
+---
+
+**Step 6: The BPR Optimization Criterion**
+
+Putting it together (maximizing log-posterior):
+
+$$\text{BPR-Opt} = \sum_{(u,i,j) \in D_S} \ln \sigma(\hat{x}_{uij}) - \lambda \|\Theta\|^2$$
+
+**Or equivalently, for matrix factorization**:
+
+$$\max_{U,V} \sum_{u} \sum_{i \in I_u^+} \sum_{j \notin I_u^+} \ln \sigma(\hat{y}_{uij}) - \lambda \|U\|^2 - \lambda \|V\|^2$$
+
+where:
+- $\hat{y}_{uij} = \hat{y}_{ui} - \hat{y}_{uj} = \mathbf{u}_u^T (\mathbf{v}_i - \mathbf{v}_j)$
+
+---
+
+### Why Pairwise Makes Sense: The Connection to Maximum Likelihood
+
+*Let's dig deeper into why this is the right objective.*
+
+**Pointwise approaches** (like treating implicit feedback as 0/1 labels):
+- Model: $p(y_{ui} = 1 | \Theta) = \sigma(\hat{r}_{ui})$
+- Problem: What's $p(y_{ui} = 0 | \Theta)$?
+- We're trying to model the probability of "NOT clicking", but we don't know if the user even saw the item!
+
+**Pairwise approaches** (BPR):
+- Model: $p(i >_u j | \Theta) = \sigma(\hat{r}_{ui} - \hat{r}_{uj})$
+- We only model *relative* preferences
+- No need to model absolute probabilities of clicking
+
+*The key advantage:* We're modeling something we can actually infer from the data (relative preferences), not something we can't (absolute click probabilities).
+
+---
+
+### Pairwise vs Pointwise: A Concrete Comparison
+
+*Let's see why this matters with an example.*
+
+**Scenario**: Alice clicked items {A, B}. Items {C, D, E} were not clicked.
+
+**Pointwise approach (WRMF-style)**:
+- Training targets: A=1, B=1, C=0, D=0, E=0
+- Learns: $\hat{r}_A \approx 1$, $\hat{r}_B \approx 1$, $\hat{r}_C \approx 0$, ...
+- Problem: Forces absolute scores. What if Alice would rate all of them highly if she saw them?
+
+**Pairwise approach (BPR)**:
+- Training signal: A > C, A > D, A > E, B > C, B > D, B > E
+- Learns: $\hat{r}_A > \hat{r}_C$, $\hat{r}_A > \hat{r}_D$, etc.
+- Key difference: Doesn't force any absolute scale! Just learns relative ordering.
+
+*Why is this better for recommendation?*
+
+We don't care if the predicted score is 0.8 or 0.2. We care about **ranking**: which items should appear at the top of the list.
+
+BPR directly optimizes for ranking. WRMF optimizes for score prediction and hopes ranking follows.
 
 ---
 
@@ -571,6 +940,137 @@ $$P(\text{sample item } j) \propto (\text{popularity of } j)^\alpha$$
 
 ---
 
+## What Can Go Wrong?
+
+*Let me warn you about the common failure modes specific to implicit feedback methods.*
+
+### Failure Mode 1: Confidence Miscalibration (WRMF)
+
+**Problem**: Your confidence function doesn't match reality.
+
+**Symptoms**:
+- Model overfits to users with many interactions
+- Users with few interactions get poor recommendations
+- Popular items dominate even for niche users
+
+**Example**: You use $\alpha = 40$, but your platform has power users with 10,000+ interactions.
+- Their confidence values: $c = 1 + 40 \times 10000 = 400,001$
+- They completely dominate the loss function!
+- Casual users (10 interactions, $c = 401$) are essentially ignored.
+
+**Solutions**:
+- Log-transform counts: $c_{ui} = 1 + \alpha \log(1 + y_{ui})$
+- Cap interaction counts: $y_{ui} = \min(y_{ui}, 100)$
+- Per-user normalization: Scale by user's total interactions
+
+---
+
+### Failure Mode 2: Negative Sampling Bias (BPR)
+
+**Problem**: Your negative sampling distribution doesn't represent true negatives.
+
+**Symptoms**:
+- AUC looks great, but recommendations are bad
+- Model learns to distinguish popular vs unpopular, not relevant vs irrelevant
+- Niche items never get recommended
+
+**Example**: With uniform sampling on a catalog where 90% of items have <10 interactions:
+- Most negatives are obscure items
+- Model easily learns: "obscure = negative"
+- But it never learns to distinguish between popular items!
+
+**Solutions**:
+- Popularity-based negative sampling
+- Hard negative mining (periodically)
+- Mix of sampling strategies
+
+---
+
+### Failure Mode 3: Feedback Loop Amplification
+
+**Problem**: Your recommendations create the data that trains future models.
+
+**Symptoms**:
+- Over time, recommendations become less diverse
+- New items never get discovered
+- User preferences appear to "narrow" (but it's a data artifact)
+
+**The loop**:
+1. Model recommends items A, B, C
+2. User clicks on A, B, C (because that's all they see!)
+3. Model learns "user likes A, B, C"
+4. Model recommends A, B, C even more
+5. Repeat...
+
+**Solutions**:
+- Exploration/exploitation (bandits)
+- Diversification in recommendation lists
+- Random exposure experiments
+- Propensity scoring to debias training data
+
+---
+
+### Failure Mode 4: Position Bias
+
+**Problem**: Users click on items because of WHERE they appear, not WHAT they are.
+
+**Symptoms**:
+- Items shown in position 1 have 10× more clicks
+- Model thinks position-1 items are universally loved
+- Retraining amplifies this bias
+
+**Example**:
+- Song A shown in position 1: 1000 clicks
+- Song B shown in position 10: 100 clicks
+- Reality: Song B might be better! Users just don't scroll down.
+
+**Solutions**:
+- Position-aware models: $y_{ui} = f(\text{rank}, \text{user}, \text{item})$
+- Inverse propensity weighting: Weight by 1/P(position)
+- Randomized experiments to measure true preferences
+
+---
+
+### Failure Mode 5: Treating Missing as Uniform Negative
+
+**Problem**: Some missing entries are "strong negatives" (user saw and rejected), others are "unknown" (user never saw).
+
+**Symptoms**:
+- Model confused about items in "maybe" category
+- Recommendations include items user explicitly skipped
+- Click-through rate doesn't improve despite good offline metrics
+
+**Example**:
+- User scrolled past Song X: Strong negative (saw it, didn't click)
+- User never saw Song Y: Unknown (might love it!)
+- Both have $y = 0$, but they're fundamentally different.
+
+**Solutions**:
+- Incorporate exposure data if available
+- Multi-level confidence: Seen-not-clicked < Never-seen
+- Inverse propensity scoring
+
+---
+
+### Failure Mode 6: Scale Mismatch Between Users
+
+**Problem**: Power users and casual users contribute very differently to loss.
+
+**Symptoms (WRMF)**:
+- Model optimizes for power users
+- Casual users get generic/popular recommendations
+
+**Symptoms (BPR)**:
+- Power users generate many training triples
+- Model overfits to their preferences
+
+**Solutions**:
+- Per-user loss normalization
+- Sample users uniformly (not interactions)
+- Weight by inverse user activity
+
+---
+
 ## Evaluation Metrics for Implicit Feedback
 
 ### Ranking Metrics
@@ -656,14 +1156,20 @@ print(recommended_items)
 
 **Key Takeaways**:
 1. **Implicit feedback is ubiquitous** in modern RecSys (clicks, views, plays)
-2. **WRMF**: Confidence-weighted pointwise approach (good for counts)
-3. **BPR**: Pairwise ranking approach (good for binary interactions)
-4. **Negative sampling** is critical for efficiency
-5. **Evaluation**: Use ranking metrics (Precision@K, NDCG), not RMSE
+2. **Can't treat missing as negative**: Absence of evidence ≠ evidence of absence
+3. **WRMF**: Confidence-weighted pointwise approach (good for counts)
+4. **BPR**: Pairwise ranking approach (good for binary interactions)
+5. **Negative sampling** is critical for efficiency
+6. **Evaluation**: Use ranking metrics (Precision@K, NDCG), not RMSE
+7. **Watch out for** confidence miscalibration, feedback loops, position bias
 
 **When to use what**:
 - **WRMF**: Audio/video streaming (Spotify, YouTube), interaction counts available
 - **BPR**: E-commerce (Amazon), news, binary clicks/purchases
+
+**The Computational Tricks**:
+- WRMF: Sparse $V^T(C-I)V$ computation → $O(k^2|I_u|)$ instead of $O(k^2|I|)$
+- BPR: Stochastic sampling → Each update is $O(k)$
 
 **Next steps**:
 - Advanced variants: SVD++, TimeSVD++ (advanced-variants.md)
