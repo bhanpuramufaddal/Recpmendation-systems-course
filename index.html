@@ -1358,6 +1358,13 @@
         }
 
         async function loadContent(weekIndex, topicIndex) {
+            // Save scroll position for previous page before loading new one
+            if (currentWeek !== null) {
+                const scrollPos = document.querySelector('.content').scrollTop;
+                const scrollKey = `scrollPos_${currentWeek}_${currentTopic}`;
+                localStorage.setItem(scrollKey, scrollPos);
+            }
+
             const week = courseStructure[weekIndex];
             currentWeek = weekIndex;
             currentTopic = topicIndex;
@@ -1431,8 +1438,20 @@
                 // Generate TOC
                 generateTOC(contentDiv);
 
-                // Scroll to top
-                document.querySelector('.content').scrollTop = 0;
+                // Save last viewed position
+                localStorage.setItem('lastViewedPage', JSON.stringify({
+                    weekIndex: weekIndex,
+                    topicIndex: topicIndex
+                }));
+
+                // Restore scroll position or scroll to top
+                const scrollKey = `scrollPos_${weekIndex}_${topicIndex}`;
+                const savedScroll = localStorage.getItem(scrollKey);
+                if (savedScroll) {
+                    document.querySelector('.content').scrollTop = parseInt(savedScroll);
+                } else {
+                    document.querySelector('.content').scrollTop = 0;
+                }
 
             } catch (error) {
                 contentDiv.innerHTML = `
@@ -1764,7 +1783,27 @@
                 }
             });
 
-            loadContent(0, null); // Load course overview
+            // Restore last viewed page or load course overview
+            const lastViewed = localStorage.getItem('lastViewedPage');
+            if (lastViewed) {
+                try {
+                    const { weekIndex, topicIndex } = JSON.parse(lastViewed);
+                    // Validate indices are still valid
+                    if (weekIndex >= 0 && weekIndex < courseStructure.length) {
+                        loadContent(weekIndex, topicIndex);
+                        // Expand the week in sidebar
+                        if (weekIndex > 0) {
+                            toggleWeek(weekIndex);
+                        }
+                    } else {
+                        loadContent(0, null);
+                    }
+                } catch (e) {
+                    loadContent(0, null);
+                }
+            } else {
+                loadContent(0, null);
+            }
         });
     </script>
 </body>
