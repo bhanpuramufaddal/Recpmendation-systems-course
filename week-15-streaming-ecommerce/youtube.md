@@ -1,4 +1,88 @@
-# Week 15: YouTube Recommendations
+# System Design: YouTube Recommendations
+
+## Problem Statement & Requirements
+
+### Interview Prompt
+
+> "Design a video recommendation system for YouTube with 2B+ users, billions of videos, and 500+ hours of content uploaded per minute."
+
+### Functional Requirements
+
+1. **Home feed**: Personalized video recommendations
+2. **Watch next**: Sidebar recommendations during video playback
+3. **Search ranking**: Query-based personalized results
+4. **Shorts feed**: Short-form vertical videos
+5. **Subscriptions**: Content from followed channels
+6. **Notifications**: New video alerts
+
+### Non-Functional Requirements
+
+1. **Latency**: Home feed < 200ms
+2. **Scale**: 2B users, 800M videos, 500K QPS
+3. **Freshness**: New videos indexed within minutes
+4. **Availability**: 99.9% uptime
+
+### Scope
+
+**In scope**: Video recommendation algorithm, watch time optimization
+**Out of scope**: Video streaming, ad serving, content moderation
+
+---
+
+## Scale Estimation (Back-of-Envelope)
+
+### Users & Traffic
+
+```
+Users:
+- Monthly Active Users: 2B+
+- Daily Active Users: 1B
+- Logged-in users: 70% of DAU
+
+Content:
+- Total videos: 800M+
+- Active videos (views in last year): 100M
+- New videos per day: 720,000 (500 hours × 60 min × 24 hours)
+
+Traffic:
+- Watch sessions per day: 1B+
+- Home feed loads per user: 3
+- Total home feed requests: 1B × 3 = 3B/day
+- Average QPS: 35,000
+- Peak QPS: 500,000
+```
+
+### Storage
+
+```
+Video Embeddings:
+- Videos: 800M
+- Embedding dimension: 256
+- Storage: 800M × 256 × 4 bytes = 800GB
+
+User Embeddings:
+- Users: 2B
+- Embedding dimension: 256
+- Storage: 2B × 256 × 4 bytes = 2TB
+
+Watch History:
+- Users: 2B × 1000 videos × 8 bytes = 16TB
+```
+
+### Latency Budget
+
+```
+Total budget: 200ms
+
+Candidate generation: 50ms
+User feature lookup: 20ms
+Video feature lookup: 30ms
+Ranking model: 50ms
+Diversity re-ranking: 20ms
+Network overhead: 30ms
+```
+
+---
 
 ## Overview
 
@@ -630,6 +714,28 @@ def generate_home_feed(user, subscription_videos, recommended_videos, k=20):
 **Problem 3**: Implement cold start strategy for new videos. Measure watch time for cold-start videos vs. warm-start videos.
 
 **Problem 4**: Design shorts ranking model. What features are most predictive of completion rate?
+
+---
+
+---
+
+## Course Concepts Applied
+
+| Concept | Week | Application in YouTube |
+|---------|------|------------------------|
+| **Collaborative Filtering** | 2-3 | "Users who watched X also watched Y" signals |
+| **Matrix Factorization** | 3 | Video embeddings from watch co-occurrence |
+| **Content-Based** | 4 | Video title, description, tags for cold start |
+| **Neural CF** | 5 | Deep ranking model for watch time prediction |
+| **Sequential Models** | 6 | Watch history sequence modeling |
+| **Graph-Based** | 7 | Channel subscription graphs |
+| **Two-Tower** | 8 | User tower + Video tower (Covington et al.) |
+| **Multi-Task Learning** | 8 | Click, watch time, like/share joint prediction |
+| **Embeddings** | 9 | Video content embeddings, user embeddings |
+| **Contextual Bandits** | 10 | Exploration for new channels/videos |
+| **Evaluation** | 11 | Watch time vs satisfaction tradeoffs |
+| **Bias/Fairness** | 12 | Clickbait reduction, quality content boost |
+| **Production Systems** | 13 | Two-stage pipeline, ANN indexing |
 
 ---
 

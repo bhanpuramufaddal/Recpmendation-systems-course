@@ -1,4 +1,91 @@
-# Week 14: Social Media - Instagram Recommendation System
+# System Design: Instagram Recommendation System
+
+## Problem Statement & Requirements
+
+### Interview Prompt
+
+> "Design a recommendation system for Instagram with 2B+ users, powering Explore, Reels, and Feed personalization."
+
+### Functional Requirements
+
+1. **Explore page**: Discover new content and creators
+2. **Reels feed**: Short-form video recommendations
+3. **Feed ranking**: Posts from followed accounts + suggested
+4. **Stories tray**: Order of story circles
+5. **Suggested accounts**: "Accounts you might like"
+
+### Non-Functional Requirements
+
+1. **Latency**: Feed/Explore load < 100ms
+2. **Scale**: 2B MAU, 500M DAU, billions of Reels plays
+3. **Freshness**: New content eligible within minutes
+4. **Availability**: 99.9% uptime
+
+### Scope
+
+**In scope**: Content ranking, personalization, computer vision integration
+**Out of scope**: Content upload, messaging, advertising
+
+---
+
+## Scale Estimation (Back-of-Envelope)
+
+### Users & Traffic
+
+```
+Users:
+- Monthly Active Users (MAU): 2B+
+- Daily Active Users (DAU): 500M+
+- Peak concurrent users: 50M
+
+Content:
+- Photos/videos shared per day: 95M+
+- Stories posted per day: 500M+
+- Reels uploaded per day: 10M+
+- Active posts (last 7 days): 700M
+
+Traffic:
+- Feed loads per user per day: 10
+- Explore visits per user: 3
+- Reels sessions per user: 5
+- Total recommendation requests: 500M × 18 = 9B/day
+- Average QPS: 100,000
+- Peak QPS: 300,000
+```
+
+### Storage
+
+```
+User Embeddings:
+- Users: 2B
+- Embedding dimension: 256
+- Storage: 2B × 256 × 4 bytes = 2TB
+
+Content Embeddings:
+- Active posts: 700M
+- Embedding dimension: 512 (vision + text)
+- Storage: 700M × 512 × 4 bytes = 1.4TB
+
+Visual Features:
+- Posts with images: 10B (all time)
+- Feature vector: 2048-dim (ResNet)
+- Compressed storage: ~50TB
+```
+
+### Latency Budget
+
+```
+Total budget: 100ms
+
+User feature lookup: 10ms
+Candidate retrieval (ANN): 20ms
+Visual embedding lookup: 15ms
+Ranking model inference: 30ms
+Diversity re-ranking: 15ms
+Network overhead: 10ms
+```
+
+---
 
 ## Overview
 
@@ -581,6 +668,28 @@ User → Candidate Retrieval → Ranking → Multi-Objective → Recommendations
 - Invest in computer vision for visual content
 - Multi-task learning for multiple objectives
 - Give users control and transparency
+
+---
+
+---
+
+## Course Concepts Applied
+
+| Concept | Week | Application in Instagram |
+|---------|------|--------------------------|
+| **Collaborative Filtering** | 2-3 | Users who engage with similar content |
+| **Matrix Factorization** | 3 | User-content embeddings |
+| **Content-Based** | 4 | Visual embeddings (ViT/ResNet), caption NLP |
+| **Neural CF** | 5 | Deep ranking models for engagement prediction |
+| **Sequential Models** | 6 | Session-based Reels recommendations |
+| **Graph-Based** | 7 | Social graph for suggested accounts |
+| **Two-Tower** | 8 | User encoder + Content encoder for retrieval |
+| **Multi-Task Learning** | 8 | Like, comment, share, save joint prediction |
+| **Embeddings** | 9 | Multi-modal (vision + text + audio) embeddings |
+| **Contextual Bandits** | 10 | Exploration in Explore page |
+| **Evaluation** | 11 | Engagement rate metrics, watch time |
+| **Bias/Fairness** | 12 | Creator exposure fairness, content diversity |
+| **Production Systems** | 13 | Two-stage pipeline, visual feature serving |
 
 ---
 

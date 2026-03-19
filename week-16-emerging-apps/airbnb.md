@@ -1,4 +1,90 @@
-# Week 16: Emerging Apps - Airbnb Recommendation System
+# System Design: Airbnb Recommendation System
+
+## Problem Statement & Requirements
+
+### Interview Prompt
+
+> "Design Airbnb's search ranking and recommendation system for a two-sided marketplace with 4M+ listings and 150M+ annual bookings."
+
+### Functional Requirements
+
+1. **Search ranking**: Rank listings for location + date queries
+2. **Similar listings**: "Homes similar to this" on listing pages
+3. **Personalized recommendations**: Homepage recommendations
+4. **Experiences recommendations**: Local activities
+5. **Wishlist recommendations**: Based on saved listings
+
+### Non-Functional Requirements
+
+1. **Latency**: Search results < 200ms
+2. **Scale**: 4M listings, 150M bookings/year
+3. **Two-sided optimization**: Balance guest and host objectives
+4. **Location-aware**: Respect geographic constraints
+
+### Scope
+
+**In scope**: Search ranking, listing embeddings, personalization
+**Out of scope**: Pricing algorithms, payment processing, messaging
+
+---
+
+## Scale Estimation (Back-of-Envelope)
+
+### Users & Traffic
+
+```
+Users:
+- Active guests: 100M/year
+- Active hosts: 4M
+- DAU (searching): 10M
+
+Listings:
+- Active listings: 4M
+- Listings per city (median): 500
+- Listings per city (major cities): 50,000+
+
+Traffic:
+- Searches per day: 50M
+- Listing page views per day: 200M
+- Bookings per day: 400K
+- Average QPS: 600
+- Peak QPS: 5,000
+```
+
+### Storage
+
+```
+Listing Embeddings:
+- Listings: 4M
+- Embedding dimension: 128
+- Storage: 4M × 128 × 4 bytes = 2GB
+
+User Embeddings:
+- Active users: 100M
+- Embedding dimension: 128
+- Storage: 100M × 128 × 4 bytes = 50GB
+
+Feature Store:
+- Listing features: 4M × 5KB = 20GB
+- User features: 100M × 1KB = 100GB
+```
+
+### Latency Budget (Search)
+
+```
+Total budget: 200ms
+
+Location/date filtering: 20ms
+User feature lookup: 15ms
+Candidate retrieval (ANN): 30ms
+Listing feature hydration: 30ms
+Ranking model: 50ms
+Position debiasing: 20ms
+Response assembly: 20ms
+Network overhead: 15ms
+```
+
+---
 
 ## Overview
 
@@ -600,6 +686,28 @@ Top-20 Results
 - Correct position bias (IPS)
 - Multi-objective optimization (bookings + quality + diversity)
 - A/B test everything
+
+---
+
+---
+
+## Course Concepts Applied
+
+| Concept | Week | Application in Airbnb |
+|---------|------|----------------------|
+| **Collaborative Filtering** | 2-3 | Users who booked X also booked Y |
+| **Matrix Factorization** | 3 | Listing embeddings from booking co-occurrence |
+| **Content-Based** | 4 | Listing amenities, photos, description |
+| **Neural CF** | 5 | Deep ranking model for booking prediction |
+| **Sequential Models** | 6 | Session-based click embeddings |
+| **Graph-Based** | 7 | Listing similarity graphs by location |
+| **Two-Tower** | 8 | User preferences + Listing features |
+| **Multi-Task Learning** | 8 | Click, inquiry, booking joint prediction |
+| **Embeddings** | 9 | Listing embeddings from click sessions (Word2Vec-style) |
+| **Contextual Bandits** | 10 | Exploration for new listings |
+| **Evaluation** | 11 | Booking rate, GBV metrics |
+| **Bias/Fairness** | 12 | Position bias (IPS), host diversity |
+| **Production Systems** | 13 | Real-time inventory, latency optimization |
 
 ---
 

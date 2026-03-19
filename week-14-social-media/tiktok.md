@@ -1,4 +1,90 @@
-# Week 14: TikTok's For You Page - The Ultimate Engagement Machine
+# System Design: TikTok's For You Page
+
+## Problem Statement & Requirements
+
+### Interview Prompt
+
+> "Design TikTok's For You Page recommendation system that personalizes content for 1B+ users with zero-friction discovery."
+
+### Functional Requirements
+
+1. **For You Page (FYP)**: Personalized infinite scroll of videos
+2. **Following feed**: Content from followed creators
+3. **Search/Discover**: Topic and hashtag exploration
+4. **Live recommendations**: Live stream suggestions
+5. **Creator recommendations**: Accounts to follow
+
+### Non-Functional Requirements
+
+1. **Latency**: FYP load < 100ms
+2. **Personalization speed**: Adapt within 10-20 videos
+3. **Scale**: 1B+ MAU, 1.5B videos
+4. **Availability**: 99.9% uptime
+
+### Scope
+
+**In scope**: Video recommendation, rapid personalization, engagement optimization
+**Out of scope**: Content moderation, video hosting, payments
+
+---
+
+## Scale Estimation (Back-of-Envelope)
+
+### Users & Traffic
+
+```
+Users:
+- Monthly Active Users: 1B+
+- Daily Active Users: 500M
+- Average session duration: 52 minutes
+- Sessions per user per day: 8
+
+Content:
+- Total videos: 1.5B+
+- Videos uploaded per day: 30M
+- Active videos (views in last 30 days): 500M
+
+Traffic:
+- Videos watched per session: 100+
+- Total video views per day: 500M × 8 × 100 = 400B views/day
+- FYP requests per day: 500M × 8 = 4B
+- Average QPS: 46,000
+- Peak QPS: 200,000
+```
+
+### Storage
+
+```
+Video Embeddings:
+- Videos: 1.5B
+- Embedding dimension: 512 (multi-modal)
+- Storage: 1.5B × 512 × 4 bytes = 3TB
+
+User Interest Embeddings:
+- Users: 1B
+- Embedding dimension: 256
+- Storage: 1B × 256 × 4 bytes = 1TB
+
+Audio Embeddings:
+- Unique sounds: 50M
+- Embedding dimension: 128
+- Storage: 50M × 128 × 4 bytes = 25GB
+```
+
+### Latency Budget
+
+```
+Total budget: 100ms
+
+User embedding lookup: 10ms
+Candidate retrieval (tiered): 30ms
+Video feature lookup: 15ms
+Ranking model: 25ms
+Diversity constraints: 10ms
+Network overhead: 10ms
+```
+
+---
 
 ## Overview
 
@@ -637,6 +723,28 @@ $$\text{Score} = w_1 \cdot E[\text{watch\_time}] + w_2 \cdot P(\text{completion}
 **Impact**: Redefined social media, forced competitors (Instagram Reels, YouTube Shorts) to copy the model.
 
 **For builders**: Study TikTok to understand state-of-the-art in engagement optimization, personalization, and viral content distribution.
+
+---
+
+---
+
+## Course Concepts Applied
+
+| Concept | Week | Application in TikTok FYP |
+|---------|------|---------------------------|
+| **Collaborative Filtering** | 2-3 | Users with similar engagement patterns |
+| **Matrix Factorization** | 3 | User-video embeddings |
+| **Content-Based** | 4 | Video understanding (CV, NLP, audio) |
+| **Neural CF** | 5 | Deep engagement prediction model |
+| **Sequential Models** | 6 | Session watch history modeling |
+| **Graph-Based** | 7 | Hashtag and sound co-occurrence graphs |
+| **Two-Tower** | 8 | User interest tower + Video tower |
+| **Multi-Task Learning** | 8 | Watch time, completion, like, share prediction |
+| **Embeddings** | 9 | Multi-modal fusion (vision + audio + text) |
+| **Contextual Bandits** | 10 | Exploration for new interests (10-20% of feed) |
+| **Evaluation** | 11 | Completion rate, watch time, DAU/MAU |
+| **Bias/Fairness** | 12 | Diversity constraints, creator exposure |
+| **Production Systems** | 13 | Tiered distribution, rapid personalization |
 
 ---
 

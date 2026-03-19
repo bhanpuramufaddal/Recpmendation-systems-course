@@ -1,4 +1,119 @@
-# Week 15: Streaming - Netflix Recommendation System
+# System Design: Netflix Recommendation System
+
+## Problem Statement & Requirements
+
+### Interview Prompt
+
+> "Design a video recommendation system for Netflix with 260M+ subscribers and 15K+ titles, powering 80% of viewing through personalized recommendations."
+
+### Functional Requirements
+
+1. **Personalized homepage**: Rows of content tailored to each user
+2. **Row generation**: Which categories/themes to show
+3. **Ranking within rows**: Which titles in each row
+4. **Artwork personalization**: Different images for different users
+5. **Continue watching**: Resume in-progress content
+6. **Search ranking**: Personalized search results
+
+### Non-Functional Requirements
+
+1. **Latency**: Homepage load < 1 second
+2. **Availability**: 99.99% uptime
+3. **Scale**: 260M subscribers, 15K titles
+4. **Freshness**: New content recommendations within hours of release
+
+### Scope
+
+**In scope**:
+- Content recommendation algorithm
+- Row generation and ranking
+- Artwork personalization
+- A/B testing infrastructure
+
+**Out of scope**:
+- Video streaming infrastructure
+- Content licensing
+- Payment systems
+
+---
+
+## Scale Estimation (Back-of-Envelope)
+
+### Users & Traffic
+
+```
+Users:
+- Subscribers: 260M globally
+- DAU (estimated): 100M
+- Concurrent peak users: 10M
+
+Traffic:
+- Homepage loads per user per day: 2
+- Total homepage requests: 100M × 2 = 200M/day
+- Average QPS: 200M / 86,400 = 2,300 QPS
+- Peak QPS (evening): 10,000 QPS
+
+Viewing:
+- Hours watched per day: 2B+ hours
+- Average session: 2 hours
+- Sessions per day: 1B
+```
+
+### Content Scale
+
+```
+Titles:
+- Total titles: 15K+
+- Movies: 5K
+- TV series: 3K (50K+ episodes)
+- New titles per week: 50-100
+
+Metadata:
+- Artworks per title: 3-10 variants
+- Languages: 30+
+- Regions: 190+
+```
+
+### Storage
+
+```
+User Embeddings:
+- Users: 260M
+- Embedding dimension: 256
+- Storage: 260M × 256 × 4 bytes = 250GB
+
+Title Embeddings:
+- Titles: 15K
+- Embedding dimension: 256
+- Storage: 15K × 256 × 4 bytes = 15MB
+
+User Profiles:
+- Users: 260M
+- Profile size: 5KB average
+- Storage: 260M × 5KB = 1.3TB
+
+Artwork Assets:
+- Titles × variants × regions: 15K × 10 × 190 = 28M images
+- Storage: 28M × 500KB = 14TB
+```
+
+### Latency Budget
+
+```
+Total budget: 1000ms
+
+Component breakdown:
+- User feature lookup: 50ms
+- Row generation: 100ms
+- Candidate retrieval: 100ms
+- Ranking (per row): 50ms × 5 rows = 250ms
+- Artwork selection: 100ms
+- Diversity re-ranking: 100ms
+- Response assembly: 100ms
+- Network overhead: 200ms
+```
+
+---
 
 ## Overview
 
@@ -597,6 +712,28 @@ User → Row Generation → Ranking → Artwork Selection → Homepage
 - Add complexity incrementally (deep learning, multi-task)
 - Always A/B test
 - Personalize multiple touchpoints
+
+---
+
+---
+
+## Course Concepts Applied
+
+| Concept | Week | Application in Netflix |
+|---------|------|------------------------|
+| **Collaborative Filtering** | 2-3 | User-user and item-item similarity for candidate generation |
+| **Matrix Factorization** | 3 | SVD++ for user-title embeddings (Netflix Prize era) |
+| **Content-Based** | 4 | Title metadata, genre, cast for cold start |
+| **Neural CF** | 5 | Deep ranking model (Personalized Video Ranker) |
+| **Sequential Models** | 6 | Session-based next title prediction |
+| **Graph-Based** | 7 | Actor/director graphs for related content |
+| **Two-Tower** | 8 | User tower + Title tower for candidate retrieval |
+| **Multi-Task Learning** | 8 | Joint CTR, watch time, completion prediction (Hydra) |
+| **Embeddings** | 9 | User taste embeddings, title content embeddings |
+| **Contextual Bandits** | 10 | Artwork personalization (Thompson Sampling) |
+| **Evaluation** | 11 | Engagement rate, retention, churn metrics |
+| **Bias/Fairness** | 12 | Popularity bias mitigation, diverse rows |
+| **Production Systems** | 13 | Two-level ranking, caching, A/B testing |
 
 ---
 
